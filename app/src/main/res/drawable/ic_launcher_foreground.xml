@@ -21,26 +21,25 @@
 
     <!-- Letter A -->
     <path
-        android:pathData="M54,32 L68,72 L64,72 L60,60 L48,60 L44,72 L40,72 Z
-                          M54,38 L62,58 L46,58 Z"
+        android:pathData="M54,32 L68,72 L64,72 L60,60 L48,60 L44,72 L40,72 Z M54,38 L62,58 L46,58 Z"
         android:fillColor="#D4AF6E" />
 
-    <!-- Corner accent dots -->
-    <circle
-        android:cx="54" android:cy="10"
-        android:r="2"
+    <!-- Corner accent dots: <circle> is invalid in VectorDrawable, use arc paths -->
+    <!-- Top dot: cx=54 cy=10 r=2 -->
+    <path
+        android:pathData="M52,10 A2,2 0 1,0 56,10 A2,2 0 1,0 52,10 Z"
         android:fillColor="#D4AF6E" />
-    <circle
-        android:cx="98" android:cy="54"
-        android:r="2"
+    <!-- Right dot: cx=98 cy=54 r=2 -->
+    <path
+        android:pathData="M96,54 A2,2 0 1,0 100,54 A2,2 0 1,0 96,54 Z"
         android:fillColor="#D4AF6E" />
-    <circle
-        android:cx="54" android:cy="98"
-        android:r="2"
+    <!-- Bottom dot: cx=54 cy=98 r=2 -->
+    <path
+        android:pathData="M52,98 A2,2 0 1,0 56,98 A2,2 0 1,0 52,98 Z"
         android:fillColor="#D4AF6E" />
-    <circle
-        android:cx="10" android:cy="54"
-        android:r="2"
+    <!-- Left dot: cx=10 cy=54 r=2 -->
+    <path
+        android:pathData="M8,54 A2,2 0 1,0 12,54 A2,2 0 1,0 8,54 Z"
         android:fillColor="#D4AF6E" />
 
 </vector>

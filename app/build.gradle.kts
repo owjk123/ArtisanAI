@@ -69,6 +69,6 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.gson)
     implementation(libs.androidx.work.runtime.ktx)
-    implementation(libs.androidx.window.size.class)
+    implementation(libs.androidx.window.size.cls)
     debugImplementation(libs.androidx.ui.tooling)
 }

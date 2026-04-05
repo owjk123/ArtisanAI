@@ -1,10 +1,8 @@
-import androidx.compose.foundation.text.BasicTextField
 package com.artisanai.ui.components
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -17,6 +15,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.unit.dp
 import com.artisanai.ui.theme.ArtisanColors
 import com.artisanai.ui.theme.ArtisanType

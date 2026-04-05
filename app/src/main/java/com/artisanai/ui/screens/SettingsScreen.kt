@@ -216,7 +216,7 @@ private fun AboutRow(label: String, value: String) {
         Text(label, style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
         Text(value, style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted))
     }
-    Divider(color = ArtisanColors.Steel.copy(alpha = 0.4f), thickness = 0.5.dp)
+    HorizontalDivider(color = ArtisanColors.Steel.copy(alpha = 0.4f), thickness = 0.5.dp)
 }
 
 private val Int.sp get() = androidx.compose.ui.unit.TextUnit(this.toFloat(), androidx.compose.ui.unit.TextUnitType.Sp)

@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -115,7 +116,11 @@ fun GeneratePanel(
                         android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     }
                     bitmap?.let {
-                        androidx.compose.foundation.Image(
+                        androidx.compose.foundation.layout.Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = androidx.compose.ui.Alignment.Center
+                            ) { androidx.compose.ui.graphics.painter.BitmapPainter
+// FIXME
                             bitmap = it.asImageBitmap(),
                             contentDescription = "参考图",
                             modifier = Modifier.fillMaxSize(),

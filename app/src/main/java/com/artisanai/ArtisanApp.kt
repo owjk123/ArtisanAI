@@ -1,9 +1,9 @@
 package com.artisanai
 
 import android.app.Application
-import android.content.Context
 import androidx.room.Room
 import com.artisanai.data.local.ArtisanDatabase
+import com.artisanai.util.ApiKeyManager
 
 class ArtisanApp : Application() {
 
@@ -18,26 +18,12 @@ class ArtisanApp : Application() {
             ArtisanDatabase::class.java,
             ArtisanDatabase.DATABASE_NAME
         ).build()
+        ApiKeyManager.init(applicationContext)
     }
 
     companion object {
         private lateinit var instance: ArtisanApp
 
         fun getDatabase(): ArtisanDatabase = instance.database
-
-        // API Key 持久化存储（SharedPreferences加密存储）
-        fun saveApiKey(context: Context, key: String) {
-            context.getSharedPreferences("artisan_prefs", Context.MODE_PRIVATE)
-                .edit().putString("api_key", key).apply()
-        }
-
-        fun getApiKey(context: Context): String {
-            return context.getSharedPreferences("artisan_prefs", Context.MODE_PRIVATE)
-                .getString("api_key", "") ?: ""
-        }
-
-        fun hasApiKey(context: Context): Boolean {
-            return getApiKey(context).isNotBlank()
-        }
     }
 }

@@ -41,8 +41,27 @@ fun GeneratePanel(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            val bytes = context.contentResolver.openInputStream(it)?.readBytes() ?: return@let
-            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            val inputStream = context.contentResolver.openInputStream(it) ?: return@let
+            val rawBytes = inputStream.readBytes()
+            // 解码原始图片，压缩到最大边1280px，减少内存占用和API传输量
+            val original = android.graphics.BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+                ?: return@let
+            val maxDim = 1280
+            val scale = if (original.width > maxDim || original.height > maxDim) {
+                maxDim.toFloat() / maxOf(original.width, original.height)
+            } else 1f
+            val bitmap = if (scale < 1f) {
+                android.graphics.Bitmap.createScaledBitmap(
+                    original,
+                    (original.width * scale).toInt(),
+                    (original.height * scale).toInt(),
+                    true
+                ).also { original.recycle() }
+            } else original
+            val out = java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
+            bitmap.recycle()
+            val base64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
             viewModel.setReferenceImage(base64)
         }
     }

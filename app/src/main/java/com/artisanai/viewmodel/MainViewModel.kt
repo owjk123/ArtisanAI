@@ -310,14 +310,8 @@ class MainViewModel(
     class Factory(private val context: Context) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             val appContext = context.applicationContext
-            // 初始化ApiKeyManager
-            com.artisanai.util.ApiKeyManager.init(appContext)
-
-            val db = androidx.room.Room.databaseBuilder(
-                appContext,
-                com.artisanai.data.local.ArtisanDatabase::class.java,
-                com.artisanai.data.local.ArtisanDatabase.DATABASE_NAME
-            ).build()
+            // 使用ArtisanApp的单例数据库，避免多实例冲突
+            val db = com.artisanai.ArtisanApp.getDatabase()
 
             @Suppress("UNCHECKED_CAST")
             return MainViewModel(

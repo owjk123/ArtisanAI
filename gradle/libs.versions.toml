@@ -37,7 +37,7 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gsonVersion" }
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workVersion" }
 androidx-adaptive = { group = "androidx.compose.material3.adaptive", name = "adaptive", version.ref = "adaptiveVersion" }
-androidx-window-size-class = { group = "androidx.compose.material3", name = "material3-window-size-class", version.ref = "windowSizeClass" }
+androidx-window-size-cls = { group = "androidx.compose.material3", name = "material3-window-size-class", version.ref = "windowSizeClass" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

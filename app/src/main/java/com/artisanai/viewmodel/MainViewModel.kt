@@ -34,10 +34,10 @@ data class MainUiState(
     val tasks: List<GenerateTask> = emptyList(),
 
     // 图库
-    val galleryImages: List<com.artisanai.data.model.GalleryImage> = emptyList(),
+    val galleryImages: List<GalleryImage> = emptyList(),
 
     // 弹窗
-    val selectedGalleryImage: com.artisanai.data.model.GalleryImage? = null,
+    val selectedGalleryImage: GalleryImage? = null,
     val toastMessage: String? = null,
 
     // 导航
@@ -54,6 +54,9 @@ class MainViewModel(
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
+    // 协程作用域，用于取消所有进行中的任务
+    private val taskJobs = mutableMapOf<String, Job>()
 
     // 并发信号量：最多同时10个生图任务
     private val semaphore = kotlinx.coroutines.sync.Semaphore(10)
@@ -85,7 +88,7 @@ class MainViewModel(
         _uiState.update { it.copy(referenceImageBase64 = null) }
     }
 
-    fun selectGalleryImage(image: com.artisanai.data.model.GalleryImage?) {
+    fun selectGalleryImage(image: GalleryImage?) {
         _uiState.update { it.copy(selectedGalleryImage = image) }
     }
 
@@ -104,6 +107,7 @@ class MainViewModel(
                     referencePrompt = polished,
                     isPolishing = false
                 )}
+                showToast("提示词润色完成 ✨")
             }.onFailure { e ->
                 _uiState.update { it.copy(isPolishing = false) }
                 showToast("润色失败: ${e.message}")
@@ -126,6 +130,7 @@ class MainViewModel(
                     referencePrompt = reversed,
                     isReversingPrompt = false
                 )}
+                showToast("反推完成 ✨")
             }.onFailure { e ->
                 _uiState.update { it.copy(isReversingPrompt = false) }
                 showToast("反推失败: ${e.message}")
@@ -141,7 +146,10 @@ class MainViewModel(
             showToast("请输入提示词")
             return
         }
-        if (state.tasks.count { it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING } >= 10) {
+        val activeCount = state.tasks.count {
+            it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
+        }
+        if (activeCount >= 10) {
             showToast("任务队列已满（最多10个并发）")
             return
         }
@@ -175,13 +183,13 @@ class MainViewModel(
     }
 
     private fun launchTaskExecution(task: GenerateTask) {
-        viewModelScope.launch {
+        val job = viewModelScope.launch {
             semaphore.acquire()
             try {
-                // 更新状态为处理中
                 updateTaskStatus(task.id, TaskStatus.PROCESSING, progress = 0.1f)
 
                 val result = if (task.referenceImageBase64 != null) {
+                    updateTaskStatus(task.id, TaskStatus.PROCESSING, progress = 0.2f)
                     imageGenRepo.editImage(
                         prompt = task.prompt,
                         imageBase64 = task.referenceImageBase64,
@@ -190,6 +198,7 @@ class MainViewModel(
                         thinkingLevel = task.thinkingLevel
                     )
                 } else {
+                    updateTaskStatus(task.id, TaskStatus.PROCESSING, progress = 0.2f)
                     imageGenRepo.generateImage(
                         prompt = task.prompt,
                         aspectRatio = task.aspectRatio,
@@ -202,7 +211,6 @@ class MainViewModel(
                 updateTaskStatus(task.id, TaskStatus.PROCESSING, progress = 0.8f)
 
                 result.onSuccess { base64 ->
-                    // 保存到内部图库
                     val saveResult = galleryRepo.saveGeneratedImage(
                         id = task.id,
                         base64Data = base64,
@@ -212,18 +220,35 @@ class MainViewModel(
                     )
                     saveResult.onSuccess { path ->
                         updateTaskFull(task.id, TaskStatus.SUCCESS, 1f, base64, path)
+                        showToast("图片生成成功 🎨")
                     }.onFailure {
                         updateTaskFull(task.id, TaskStatus.SUCCESS, 1f, base64, null)
+                        showToast("图片生成成功 🎨")
                     }
                 }.onFailure { e ->
-                    updateTaskStatus(task.id, TaskStatus.FAILED, errorMessage = e.message)
+                    val msg = e.message ?: "未知错误"
+                    updateTaskStatus(task.id, TaskStatus.FAILED, errorMessage = msg)
+                    showToast("生成失败: $msg")
                 }
             } finally {
+                taskJobs.remove(task.id)
                 semaphore.release()
             }
         }
+        taskJobs[task.id] = job
     }
 
+    // ── 取消任务 ───────────────────────────────────────────
+    fun cancelTask(taskId: String) {
+        taskJobs[taskId]?.cancel()
+        taskJobs.remove(taskId)
+        _uiState.update { state ->
+            state.copy(tasks = state.tasks.filter { it.id != taskId })
+        }
+        showToast("任务已取消")
+    }
+
+    // ── 重试失败任务 ───────────────────────────────────────
     fun retryTask(taskId: String) {
         val task = _uiState.value.tasks.find { it.id == taskId } ?: return
         val newTask = task.copy(
@@ -242,11 +267,31 @@ class MainViewModel(
         launchTaskExecution(newTask)
     }
 
+    // ── 重试所有失败任务 ───────────────────────────────────
+    fun retryAllFailed() {
+        val failed = _uiState.value.tasks.filter { it.status == TaskStatus.FAILED }
+        if (failed.isEmpty()) {
+            showToast("没有失败的任务")
+            return
+        }
+        failed.forEach { retryTask(it.id) }
+        showToast("已重新提交 ${failed.size} 个任务")
+    }
+
+    // ── 移除任务 ───────────────────────────────────────────
     fun removeTask(taskId: String) {
+        taskJobs[taskId]?.cancel()
+        taskJobs.remove(taskId)
         _uiState.update { it.copy(tasks = it.tasks.filter { t -> t.id != taskId }) }
     }
 
+    // ── 清除已完成任务 ─────────────────────────────────────
     fun clearCompletedTasks() {
+        val completed = _uiState.value.tasks.filter {
+            it.status == TaskStatus.SUCCESS || it.status == TaskStatus.FAILED
+        }
+        completed.forEach { taskJobs.remove(it.id)?.cancel() }
+        taskJobs.clear()
         _uiState.update { it.copy(
             tasks = it.tasks.filter { t ->
                 t.status == TaskStatus.QUEUED || t.status == TaskStatus.PROCESSING
@@ -254,8 +299,16 @@ class MainViewModel(
         )}
     }
 
+    // ── 清除所有任务 ──────────────────────────────────────
+    fun clearAllTasks() {
+        taskJobs.values.forEach { it.cancel() }
+        taskJobs.clear()
+        _uiState.update { it.copy(tasks = emptyList()) }
+        showToast("已清空所有任务")
+    }
+
     // ── 图库操作 ───────────────────────────────────────────
-    fun saveToAlbum(image: com.artisanai.data.model.GalleryImage) {
+    fun saveToAlbum(image: GalleryImage) {
         viewModelScope.launch {
             val result = galleryRepo.saveToAlbum(image.id, image.imagePath)
             result.onSuccess { showToast("已保存到相册") }
@@ -263,7 +316,7 @@ class MainViewModel(
         }
     }
 
-    fun deleteGalleryImage(image: com.artisanai.data.model.GalleryImage) {
+    fun deleteGalleryImage(image: GalleryImage) {
         viewModelScope.launch {
             galleryRepo.deleteImage(image)
             if (_uiState.value.selectedGalleryImage?.id == image.id) {
@@ -306,12 +359,17 @@ class MainViewModel(
         _uiState.update { it.copy(toastMessage = msg) }
     }
 
+    override fun onCleared() {
+        super.onCleared()
+        taskJobs.values.forEach { it.cancel() }
+        taskJobs.clear()
+    }
+
     // ── ViewModelFactory ───────────────────────────────────
     class Factory(private val context: Context) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             val appContext = context.applicationContext
-            // 初始化ApiKeyManager
-            com.artisanai.util.ApiKeyManager.init(appContext)
+            ApiKeyManager.init(appContext)
 
             val db = androidx.room.Room.databaseBuilder(
                 appContext,

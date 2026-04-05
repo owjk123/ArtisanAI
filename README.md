@@ -1,6 +1,15 @@
 # Artisan AI — 高奢风格 AI 图像生成 App
 
-> 基于 Nano Banana 2 (gemini-3.1-flash-image-preview) 的 Android 生图应用
+> 基于 Nano Banana 2 (gemini-3.1-flash-image-preview) 的 Android 生图应用，界面采用高端黑金主题
+
+---
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Android%20%7C%20Tablet-green?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Kotlin-2.1.0-7F52FF?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Compose-Material3-red?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Model-Nano%20Banana%202-blue?style=for-the-badge" />
+</p>
 
 ---
 
@@ -8,15 +17,39 @@
 
 | 功能 | 说明 |
 |------|------|
-| 🎨 AI 生图 | 调用 Nano Banana 2，支持 2K/4K、14 种宽高比 |
-| 🔍 图像搜索增强 | Grounding 模式，参考真实世界图像 |
-| 🧠 思维模式 | minimal / high 两档，复杂提示词更精准 |
-| ✨ AI 润色提示词 | Gemini 3.1 Flash Lite 将中文描述转为专业英文提示词 |
-| 🖼 反推参考图 | 上传参考图，AI 分析并生成对应提示词 |
-| 📋 并发任务队列 | 最多 10 个任务同时运行，实时进度展示 |
-| 🗂 图库管理 | 内部图库 + 一键下载到系统相册 |
-| 📱 自适应布局 | 手机竖屏（底部 Tab）/ 平板横屏（三栏布局）|
-| ⚙️ 用户自填 Key | 设置页输入自己的 API Key，安全可控 |
+| 🎨 **AI 生图** | 调用 Nano Banana 2，支持 2K/4K、14 种宽高比 |
+| 🔍 **图像搜索增强** | Grounding 模式，参考真实世界图像生成 |
+| 🧠 **思维模式** | none / minimal / high 三档，复杂提示词更精准 |
+| ✨ **AI 润色提示词** | Gemini 3.1 Flash Lite 将中文描述转为专业英文提示词 |
+| 🖼 **反推参考图** | 上传参考图，AI 分析并生成对应英文提示词 |
+| 📋 **并发任务队列** | 最多 10 个任务同时运行，实时进度展示 |
+| 🗂 **图库管理** | 内部图库 + 一键下载到系统相册，支持排序/多选/分享 |
+| 📱 **自适应布局** | 手机竖屏（底部 Tab）/ 平板横屏（三栏布局）|
+| ⚙️ **用户自填 Key** | 设置页输入 API Key，支持 API 连接测试 |
+| 📝 **提示词模板** | 内置 8 种场景模板，快速开始 |
+| 🔄 **任务管理** | 取消/重试/清空，失败任务一键重试所有 |
+| 📤 **图片分享** | 生图后直接分享到其他 App |
+
+---
+
+## 分支说明
+
+| 分支 | 说明 |
+|------|------|
+| `main` | 原始版本（owjk123/ArtisanAI） |
+| `openclaw-improvements` | 增强版本（本分支），包含所有 UX/UI 改进 |
+
+### 增强版本新增功能
+
+- ✅ 提示词模板（8 种场景）
+- ✅ 复制提示词按钮
+- ✅ 图库排序（最新/最早/分辨率优先）
+- ✅ 图库多选删除 + 批量保存
+- ✅ 任务预览大图 + 分享
+- ✅ 任务取消功能
+- ✅ 一键重试所有失败任务
+- ✅ Settings API 健康检查
+- ✅ 更完善的错误处理
 
 ---
 

@@ -15,57 +15,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 代码检出 ───────────────────────────────────────
+      # ── 代码检出（包含 gradle-wrapper.jar）─────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── JDK 17 + Gradle 缓存 ────────────────────────────
-      - name: Set up JDK ${{ env.JAVA_VERSION }} + Gradle
+      # ── JDK 17 ─────────────────────────────────────────
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: 'temurin'
           cache: 'gradle'
 
-      # ── Android SDK ─────────────────────────────────────
+      # ── Android SDK ────────────────────────────────────
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           sdk-version: ${{ env.ANDROID_COMPILE_SDK }}
           build-tools-version: ${{ env.ANDROID_BUILD_TOOLS }}
 
-      # ── Gradle Wrapper（从 Maven Central 下载 jar）──────
-      - name: Setup Gradle Wrapper
-        run: |
-          mkdir -p gradle/wrapper
-          # 直接下载 gradle-wrapper.jar（不需要完整 Gradle 发行包）
-          curl -fsSL "https://repo.maven.apache.org/maven2/org/gradle/gradle-wrapper/8.9/gradle-wrapper-8.9.jar" \
-            -o gradle/wrapper/gradle-wrapper.jar
-          echo "distributionBase=GRADLE_USER_HOME" > gradle/wrapper/gradle-wrapper.properties
-          echo "distributionPath=wrapper/dists" >> gradle/wrapper/gradle-wrapper.properties
-          echo "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-bin.zip" >> gradle/wrapper/gradle-wrapper.properties
-          echo "networkTimeout=10000" >> gradle/wrapper/gradle-wrapper.properties
-          echo "zipStoreBase=GRADLE_USER_HOME" >> gradle/wrapper/gradle-wrapper.properties
-          echo "zipStorePath=wrapper/dists" >> gradle/wrapper/gradle-wrapper.properties
-          echo "validateDistributionUrl=true" >> gradle/wrapper/gradle-wrapper.properties
-          echo "zipValidateBase=GRADLE_USER_HOME" >> gradle/wrapper/gradle-wrapper.properties
-          echo "zipValidatePath=wrapper/dists" >> gradle/wrapper/gradle-wrapper.properties
-          chmod +x gradlew
-          echo "✅ Gradle Wrapper ready"
-          ls -la gradle/wrapper/
-
-      # ── 接受协议 ─────────────────────────────────────────
+      # ── 接受协议 ────────────────────────────────────────
       - name: Accept Android SDK Licenses
-        run: |
-          yes | sdkmanager --licenses 2>/dev/null || true
+        run: yes | sdkmanager --licenses 2>/dev/null || true
 
       # ── 构建 Debug APK ──────────────────────────────────
       - name: Build Debug APK
         run: |
+          chmod +x gradlew
           ./gradlew assembleDebug \
             --stacktrace \
             --no-daemon \
-            2>&1 | tail -40
+            2>&1 | tail -50
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m -Dorg.gradle.daemon=false"
 
@@ -87,7 +67,7 @@ jobs:
           echo "=== Release APKs ==="
           find app/build/outputs/apk/release -name "*.apk" -exec ls -lh {} \;
 
-      # ── 上传 Debug APK ───────────────────────────────────
+      # ── 上传 Debug APK ──────────────────────────────────
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         if: success()

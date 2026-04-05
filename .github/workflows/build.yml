@@ -15,11 +15,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 代码检出（包含 gradle-wrapper.jar）─────────────
+      # ── 代码检出 ─────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── JDK 17 ─────────────────────────────────────────
+      # ── JDK 17 ───────────────────────────────────────
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
@@ -27,71 +27,57 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      # ── Android SDK ────────────────────────────────────
+      # ── Android SDK ─────────────────────────────────
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           sdk-version: ${{ env.ANDROID_COMPILE_SDK }}
           build-tools-version: ${{ env.ANDROID_BUILD_TOOLS }}
 
-      # ── 接受协议 ────────────────────────────────────────
+      # ── 接受协议 ────────────────────────────────────
       - name: Accept Android SDK Licenses
         run: yes | sdkmanager --licenses 2>/dev/null || true
 
-      # ── 构建 Debug APK ──────────────────────────────────
+      # ── Debug APK ────────────────────────────────────
       - name: Build Debug APK
+        id: debug-build
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug \
-            --stacktrace \
-            --no-daemon \
-            2>&1 | tail -50
+          ./gradlew assembleDebug --no-daemon 2>&1
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m -Dorg.gradle.daemon=false"
 
-      # ── 构建 Release APK ─────────────────────────────────
+      # ── Release APK ──────────────────────────────────
       - name: Build Release APK
+        id: release-build
         run: |
-          ./gradlew assembleRelease \
-            --no-daemon \
-            2>&1 | tail -20
+          ./gradlew assembleRelease --no-daemon 2>&1
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m -Dorg.gradle.daemon=false"
 
-      # ── 列出构建产物 ─────────────────────────────────────
+      # ── 列出产物 ─────────────────────────────────────
       - name: List APK outputs
         run: |
           echo "=== Debug APKs ==="
-          find app/build/outputs/apk/debug -name "*.apk" -exec ls -lh {} \;
+          ls -lh app/build/outputs/apk/debug/ 2>/dev/null || echo "  (无文件)"
           echo ""
           echo "=== Release APKs ==="
-          find app/build/outputs/apk/release -name "*.apk" -exec ls -lh {} \;
+          ls -lh app/build/outputs/apk/release/ 2>/dev/null || echo "  (无文件)"
 
-      # ── 上传 Debug APK ──────────────────────────────────
+      # ── 上传 Debug APK ───────────────────────────────
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         if: success()
         with:
           name: ArtisanAI-Debug-${{ github.ref_name }}-${{ github.run_number }}
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/debug/
           retention-days: 30
 
-      # ── 上传 Release APK ─────────────────────────────────
+      # ── 上传 Release APK ─────────────────────────────
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         if: success()
         with:
           name: ArtisanAI-Release-${{ github.ref_name }}-${{ github.run_number }}
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/release/
           retention-days: 30
-
-      # ── 上传失败日志 ─────────────────────────────────────
-      - name: Upload build logs on failure
-        uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: build-logs-failed-${{ github.run_number }}
-          path: |
-            app/build/outputs/logs/
-            app/build/reports/
-          retention-days: 7

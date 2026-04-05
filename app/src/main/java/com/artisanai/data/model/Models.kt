@@ -11,18 +11,22 @@ enum class TaskStatus {
     FAILED        // 失败
 }
 
-// ── 宽高比选项 ─────────────────────────────────────────────
+// ── 宽高比选项（14种）─────────────────────────────────────
 enum class AspectRatio(val label: String, val value: String, val widthRatio: Float, val heightRatio: Float) {
-    PORTRAIT_9_16("9:16", "9:16", 9f, 16f),
-    PORTRAIT_3_4("3:4", "3:4", 3f, 4f),
-    PORTRAIT_2_3("2:3", "2:3", 2f, 3f),
-    SQUARE_1_1("1:1", "1:1", 1f, 1f),
-    LANDSCAPE_4_3("4:3", "4:3", 4f, 3f),
-    LANDSCAPE_3_2("3:2", "3:2", 3f, 2f),
-    LANDSCAPE_16_9("16:9", "16:9", 16f, 9f),
-    LANDSCAPE_21_9("21:9", "21:9", 21f, 9f),
-    ULTRA_TALL_1_4("1:4", "1:4", 1f, 4f),
-    ULTRA_WIDE_4_1("4:1", "4:1", 4f, 1f),
+    PORTRAIT_9_16("9:16",  "9:16",  9f, 16f),
+    PORTRAIT_4_5("4:5",   "4:5",   4f, 5f),
+    PORTRAIT_3_4("3:4",   "3:4",   3f, 4f),
+    PORTRAIT_2_3("2:3",   "2:3",   2f, 3f),
+    PORTRAIT_1_2("1:2",   "1:2",   1f, 2f),
+    SQUARE_1_1("1:1",     "1:1",   1f, 1f),
+    LANDSCAPE_2_1("2:1",  "2:1",   2f, 1f),
+    LANDSCAPE_4_3("4:3",  "4:3",   4f, 3f),
+    LANDSCAPE_5_4("5:4",  "5:4",   5f, 4f),
+    LANDSCAPE_3_2("3:2",  "3:2",   3f, 2f),
+    LANDSCAPE_16_9("16:9","16:9",  16f, 9f),
+    LANDSCAPE_21_9("21:9","21:9",  21f, 9f),
+    ULTRA_TALL_1_4("1:4", "1:4",   1f, 4f),
+    ULTRA_WIDE_4_1("4:1", "4:1",   4f, 1f),
 }
 
 // ── 分辨率选项 ─────────────────────────────────────────────

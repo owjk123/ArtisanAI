@@ -22,8 +22,8 @@ class AgentRepository(private val context: Context) {
         .build()
 
     private val gson = Gson()
-    private val apiKey get() = ApiKeyManager.loadApiKey(context)
-    private val chatUrl get() = "${ApiKeyManager.loadBaseUrl(context)}/v1/chat/completions"
+    private val apiKey get() = ApiKeyManager.loadAgentApiKey(context)
+    private val chatUrl get() = "${ApiKeyManager.loadAgentBaseUrl(context)}/v1/chat/completions"
     private val model = "gemini-3.1-flash-lite-preview"
 
     /** 润色提示词：中文描述 → 专业英文提示词 */

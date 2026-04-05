@@ -24,8 +24,11 @@ data class MainUiState(
     val selectedImageSize: ImageSize = ImageSize.SIZE_2K,
     val selectedThinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL,
     val useGrounding: Boolean = false,
-    val referenceImageBase64: String? = null,  // 风格参考图（图生图）
-    val reverseImageBase64: String? = null,    // 反推分析图（提取提示词用）
+    val referenceImages: List<String> = emptyList(), // 最多5张风格参考图
+    val reverseImageBase64: String? = null,          // 反推分析图（提取提示词用）
+
+    // 模式
+    val isReverseMode: Boolean = false,
 
     // Agent状态
     val isPolishing: Boolean = false,
@@ -82,12 +85,22 @@ class MainViewModel(
     fun setCurrentTab(tab: AppTab) = _uiState.update { it.copy(currentTab = tab) }
     fun dismissToast() = _uiState.update { it.copy(toastMessage = null) }
 
-    fun setReferenceImage(base64: String?) {
-        _uiState.update { it.copy(referenceImageBase64 = base64) }
+    // 参考图（多张，最多5张）
+    fun addReferenceImage(base64: String) {
+        _uiState.update { state ->
+            if (state.referenceImages.size >= 5) state
+            else state.copy(referenceImages = state.referenceImages + base64)
+        }
     }
 
-    fun clearReferenceImage() {
-        _uiState.update { it.copy(referenceImageBase64 = null) }
+    fun removeReferenceImage(index: Int) {
+        _uiState.update { state ->
+            state.copy(referenceImages = state.referenceImages.toMutableList().also { it.removeAt(index) })
+        }
+    }
+
+    fun clearReferenceImages() {
+        _uiState.update { it.copy(referenceImages = emptyList()) }
     }
 
     fun setReverseImage(base64: String?) {
@@ -100,6 +113,10 @@ class MainViewModel(
 
     fun selectCount(count: Int) {
         _uiState.update { it.copy(selectedCount = count) }
+    }
+
+    fun setReverseMode(enabled: Boolean) {
+        _uiState.update { it.copy(isReverseMode = enabled) }
     }
 
     fun selectGalleryImage(image: com.artisanai.data.model.GalleryImage?) {
@@ -128,9 +145,9 @@ class MainViewModel(
         }
     }
 
-    // ── Agent：反推参考图提示词 ────────────────────────────
+    // ── Agent：反推参考图提示词（手动触发，返回 Result 供内部复用）─
     fun reversePromptFromImage() {
-        val imageBase64 = _uiState.value.reverseImageBase64 ?: _uiState.value.referenceImageBase64
+        val imageBase64 = _uiState.value.reverseImageBase64
         if (imageBase64 == null) {
             showToast("请先上传反推参考图")
             return
@@ -139,10 +156,7 @@ class MainViewModel(
             _uiState.update { it.copy(isReversingPrompt = true) }
             val result = agentRepo.reversePromptFromImage(imageBase64)
             result.onSuccess { reversed ->
-                _uiState.update { it.copy(
-                    referencePrompt = reversed,
-                    isReversingPrompt = false
-                )}
+                _uiState.update { it.copy(referencePrompt = reversed, isReversingPrompt = false) }
             }.onFailure { e ->
                 _uiState.update { it.copy(isReversingPrompt = false) }
                 showToast("反推失败: ${e.message}")
@@ -150,32 +164,71 @@ class MainViewModel(
         }
     }
 
+    /** 内部使用：等待反推完成并返回提示词 */
+    private suspend fun runReversePrompt(imageBase64: String): Result<String> {
+        _uiState.update { it.copy(isReversingPrompt = true) }
+        val result = agentRepo.reversePromptFromImage(imageBase64)
+        result.onSuccess { reversed ->
+            _uiState.update { it.copy(referencePrompt = reversed, isReversingPrompt = false) }
+        }.onFailure {
+            _uiState.update { it.copy(isReversingPrompt = false) }
+        }
+        return result
+    }
+
     // ── 添加生成任务 ───────────────────────────────────────
     fun addGenerateTask() {
         val state = _uiState.value
         val userPrompt = state.userPrompt.trim()
-        if (userPrompt.isBlank()) {
-            showToast("请输入提示词")
-            return
-        }
         val activeCount = state.tasks.count { it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING }
         if (activeCount + state.selectedCount > 10) {
             showToast("任务队列已满（最多10个并发）")
             return
         }
 
-        val finalPrompt = buildFinalPrompt(userPrompt, state.referencePrompt)
+        // 反推模式且有反推图时，先自动执行反推再加队列
+        if (state.isReverseMode && state.reverseImageBase64 != null) {
+            if (userPrompt.isBlank() && state.referencePrompt.isBlank()) {
+                // prompt 为空也允许：反推结果会作为 prompt
+            }
+            viewModelScope.launch {
+                val reverseResult = runReversePrompt(state.reverseImageBase64)
+                reverseResult.onSuccess { reversed ->
+                    val updatedState = _uiState.value
+                    val finalPrompt = buildFinalPrompt(updatedState.userPrompt.trim(), reversed)
+                    if (finalPrompt.isBlank()) {
+                        showToast("反推结果为空，请重试")
+                        return@onSuccess
+                    }
+                    doEnqueueTasks(updatedState, finalPrompt, reversed)
+                }.onFailure { e ->
+                    showToast("反推失败: ${e.message}")
+                }
+            }
+            return
+        }
 
+        // 直接生图模式
+        if (userPrompt.isBlank()) {
+            showToast("请输入提示词")
+            return
+        }
+        val finalPrompt = buildFinalPrompt(userPrompt, state.referencePrompt)
+        doEnqueueTasks(state, finalPrompt, state.referencePrompt)
+    }
+
+    private fun doEnqueueTasks(state: MainUiState, finalPrompt: String, refPrompt: String) {
+        val refImage = state.referenceImages.firstOrNull()
         repeat(state.selectedCount) {
             val task = GenerateTask(
                 id = UUID.randomUUID().toString(),
                 prompt = finalPrompt,
-                referencePrompt = state.referencePrompt,
+                referencePrompt = refPrompt,
                 aspectRatio = state.selectedAspectRatio,
                 imageSize = state.selectedImageSize,
                 thinkingLevel = state.selectedThinkingLevel,
                 useGrounding = state.useGrounding,
-                referenceImageBase64 = state.referenceImageBase64,
+                referenceImageBase64 = refImage,
                 status = TaskStatus.QUEUED
             )
             _uiState.update { it.copy(tasks = it.tasks + task) }

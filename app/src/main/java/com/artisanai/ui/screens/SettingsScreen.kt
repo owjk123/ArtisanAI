@@ -25,9 +25,21 @@ import com.artisanai.ui.theme.ArtisanType
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    // 生图 API
     var apiKey by remember { mutableStateOf(ApiKeyManager.loadApiKey(context)) }
     var baseUrl by remember { mutableStateOf(ApiKeyManager.loadBaseUrl(context)) }
     var keyVisible by remember { mutableStateOf(false) }
+    // Agent API（AI优化/反推）
+    var agentKey by remember { mutableStateOf(
+        context.getSharedPreferences("artisan_prefs", android.content.Context.MODE_PRIVATE)
+            .getString("agent_api_key", "") ?: ""
+    ) }
+    var agentUrl by remember { mutableStateOf(
+        context.getSharedPreferences("artisan_prefs", android.content.Context.MODE_PRIVATE)
+            .getString("agent_base_url", "") ?: ""
+    ) }
+    var agentKeyVisible by remember { mutableStateOf(false) }
+
     var saved by remember { mutableStateOf(false) }
 
     val hasKey = apiKey.isNotBlank()
@@ -177,12 +189,96 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             }
 
+            // ── Agent API（AI优化/反推）卡片 ─────────────
+            ArtisanCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(ArtisanColors.GoldMist),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.AutoFixHigh, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Agent API (AI优化/反推)", style = ArtisanType.TitleGold.copy(fontSize = 15.sp))
+                        Text(
+                            if (agentKey.isNotBlank()) "已配置独立 Key" else "未设置时自动使用生图 API",
+                            style = ArtisanType.Caption.copy(
+                                color = if (agentKey.isNotBlank()) ArtisanColors.Success else ArtisanColors.TextMuted
+                            )
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = agentKey,
+                    onValueChange = { agentKey = it; saved = false },
+                    placeholder = { Text("独立 Agent Key（留空则复用生图 Key）", style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted)) },
+                    visualTransformation = if (agentKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { agentKeyVisible = !agentKeyVisible }) {
+                            Icon(
+                                if (agentKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                null, tint = ArtisanColors.TextMuted, modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = ArtisanType.Body,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ArtisanColors.Champagne,
+                        unfocusedBorderColor = ArtisanColors.Steel,
+                        focusedTextColor = ArtisanColors.TextPrimary,
+                        unfocusedTextColor = ArtisanColors.TextPrimary,
+                        cursorColor = ArtisanColors.Champagne,
+                        focusedContainerColor = ArtisanColors.Graphite,
+                        unfocusedContainerColor = ArtisanColors.Graphite,
+                    ),
+                    shape = RoundedCornerShape(6.dp)
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = agentUrl,
+                    onValueChange = { agentUrl = it; saved = false },
+                    placeholder = { Text("Agent API 地址（留空则复用生图地址）", style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = ArtisanType.Body,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ArtisanColors.Champagne,
+                        unfocusedBorderColor = ArtisanColors.Steel,
+                        focusedTextColor = ArtisanColors.TextPrimary,
+                        unfocusedTextColor = ArtisanColors.TextPrimary,
+                        cursorColor = ArtisanColors.Champagne,
+                        focusedContainerColor = ArtisanColors.Graphite,
+                        unfocusedContainerColor = ArtisanColors.Graphite,
+                    ),
+                    shape = RoundedCornerShape(6.dp)
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "用于 AI 优化提示词和反推提示词功能，使用不同模型/服务时可单独配置",
+                    style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 11.sp)
+                )
+            }
+
             // ── 保存按钮 ──────────────────────────────────
             GoldButton(
                 text = if (saved) "✓  已保存" else "保存配置",
                 onClick = {
                     ApiKeyManager.saveApiKey(context, apiKey)
                     ApiKeyManager.saveBaseUrl(context, baseUrl.ifBlank { "https://api.apiyi.com" })
+                    ApiKeyManager.saveAgentApiKey(context, agentKey)
+                    ApiKeyManager.saveAgentBaseUrl(context, agentUrl)
                     saved = true
                 },
                 modifier = Modifier.fillMaxWidth(),

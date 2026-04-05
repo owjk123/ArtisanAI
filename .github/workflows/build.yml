@@ -2,60 +2,82 @@ name: Build ArtisanAI APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, openclaw-improvements ]
   workflow_dispatch:
+
+env:
+  JAVA_VERSION: '17'
+  ANDROID_COMPILE_SDK: '35'
+  ANDROID_BUILD_TOOLS: '35.0.0'
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      # ── 代码检出 ─────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      # ── JDK 17 ───────────────────────────────────────
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: ${{ env.JAVA_VERSION }}
           distribution: 'temurin'
+          cache: 'gradle'
 
+      # ── Android SDK ─────────────────────────────────
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          sdk-version: ${{ env.ANDROID_COMPILE_SDK }}
+          build-tools-version: ${{ env.ANDROID_BUILD_TOOLS }}
 
-      - name: Generate Gradle Wrapper
-        run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip -O /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /tmp/gradle-dist
-          /tmp/gradle-dist/gradle-8.9/bin/gradle wrapper --gradle-version 8.9
-          chmod +x gradlew
-          ls -la gradlew
-
+      # ── 接受协议 ────────────────────────────────────
       - name: Accept Android SDK Licenses
-        run: yes | sdkmanager --licenses || true
+        run: yes | sdkmanager --licenses 2>/dev/null || true
 
+      # ── Debug APK ────────────────────────────────────
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        id: debug-build
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon 2>&1
         env:
-          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m -Dorg.gradle.daemon=false"
 
+      # ── Release APK ──────────────────────────────────
       - name: Build Release APK
-        run: ./gradlew assembleRelease --stacktrace --no-daemon
+        id: release-build
+        run: |
+          ./gradlew assembleRelease --no-daemon 2>&1
         env:
-          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m -Dorg.gradle.daemon=false"
 
-      - name: List outputs
-        run: find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \;
+      # ── 列出产物 ─────────────────────────────────────
+      - name: List APK outputs
+        run: |
+          echo "=== Debug APKs ==="
+          ls -lh app/build/outputs/apk/debug/ 2>/dev/null || echo "  (无文件)"
+          echo ""
+          echo "=== Release APKs ==="
+          ls -lh app/build/outputs/apk/release/ 2>/dev/null || echo "  (无文件)"
 
+      # ── 上传 Debug APK ───────────────────────────────
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
+        if: success()
         with:
-          name: ArtisanAI-Debug-v${{ github.run_number }}
-          path: app/build/outputs/apk/debug/*.apk
+          name: ArtisanAI-Debug-${{ github.ref_name }}-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/
           retention-days: 30
 
+      # ── 上传 Release APK ─────────────────────────────
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
+        if: success()
         with:
-          name: ArtisanAI-Release-v${{ github.run_number }}
-          path: app/build/outputs/apk/release/*.apk
+          name: ArtisanAI-Release-${{ github.ref_name }}-${{ github.run_number }}
+          path: app/build/outputs/apk/release/
           retention-days: 30

@@ -26,6 +26,9 @@ class AgentRepository(private val context: Context) {
     private val chatUrl get() = "${ApiKeyManager.loadAgentBaseUrl(context)}/v1/chat/completions"
     private val model = "gemini-3.1-flash-lite-preview"
 
+    private val customSystemPrompt get() = ApiKeyManager.loadAgentSystemPrompt(context)
+        .let { if (it.isBlank()) "" else "\n\nAdditional instructions:\n$it" }
+
     /** 润色提示词：中文描述 → 专业英文提示词 */
     suspend fun polishPrompt(userInput: String): Result<String> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Result.failure(Exception("请先填写 API Key"))
@@ -35,7 +38,7 @@ Rules:
 - Output ONLY the prompt, no explanations or prefixes
 - Include: subject, style, lighting, composition, quality boosters (masterpiece, ultra detailed, etc.)
 - Keep it concise and powerful, under 200 words
-- Output the prompt text only"""
+- Output the prompt text only""" + customSystemPrompt
         callChat(system, "Convert to image prompt: $userInput")
     }
 
@@ -50,7 +53,7 @@ Rules:
 - Cover: subject, style, color palette, lighting, composition, technical parameters
 - Include quality boosters
 - 100-150 words maximum
-- No explanations, just the prompt"""
+- No explanations, just the prompt""" + customSystemPrompt
 
             val body = JsonObject().apply {
                 addProperty("model", model)

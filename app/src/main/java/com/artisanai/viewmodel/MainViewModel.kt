@@ -49,7 +49,10 @@ data class MainUiState(
     val toastMessage: String? = null,
 
     // 导航
-    val currentTab: AppTab = AppTab.GENERATE
+    val currentTab: AppTab = AppTab.GENERATE,
+
+    // 图片编辑会话
+    val editSession: EditSession = EditSession()
 )
 
 enum class AppTab { GENERATE, GALLERY }
@@ -344,6 +347,98 @@ class MainViewModel(
                 _uiState.update { it.copy(selectedGalleryImage = null) }
             }
             showToast("已删除")
+        }
+    }
+
+    // ── 图片编辑（多轮对话）────────────────────────────────
+    fun setEditSourceImage(base64: String?) {
+        _uiState.update { it.copy(editSession = it.editSession.copy(sourceImageBase64 = base64, turns = emptyList())) }
+    }
+
+    fun updateEditInstruction(text: String) {
+        _uiState.update { it.copy(editSession = it.editSession.copy(instruction = text)) }
+    }
+
+    fun clearEditSession() {
+        _uiState.update { it.copy(editSession = EditSession()) }
+    }
+
+    fun sendEditInstruction() {
+        val session = _uiState.value.editSession
+        val instruction = session.instruction.trim()
+        if (instruction.isBlank()) { showToast("请输入编辑指令"); return }
+        if (session.turns.isEmpty() && session.sourceImageBase64 == null) {
+            showToast("请先上传要编辑的图片"); return
+        }
+        if (session.isGenerating) return
+
+        val newTurn = EditTurn(
+            userText = instruction,
+            inputImageBase64 = if (session.turns.isEmpty()) session.sourceImageBase64 else null
+        )
+        _uiState.update { it.copy(
+            editSession = it.editSession.copy(
+                turns = it.editSession.turns + newTurn.copy(isGenerating = true),
+                instruction = "",
+                isGenerating = true
+            )
+        )}
+
+        viewModelScope.launch {
+            val completedTurns = _uiState.value.editSession.turns.dropLast(1)
+                .filter { it.resultImageBase64 != null }
+            val state = _uiState.value
+
+            val result = imageGenRepo.multiTurnEditImage(
+                completedTurns = completedTurns,
+                newInstruction = instruction,
+                sourceImageBase64 = session.sourceImageBase64,
+                aspectRatio = state.selectedAspectRatio,
+                imageSize = state.selectedImageSize,
+                thinkingLevel = state.selectedThinkingLevel
+            )
+            val turnId = newTurn.id
+            result.onSuccess { base64 ->
+                _uiState.update { st ->
+                    st.copy(editSession = st.editSession.copy(
+                        turns = st.editSession.turns.map { t ->
+                            if (t.id == turnId) t.copy(resultImageBase64 = base64, isGenerating = false) else t
+                        },
+                        isGenerating = false
+                    ))
+                }
+                // 保存到图库
+                galleryRepo.saveGeneratedImage(
+                    id = turnId,
+                    base64Data = base64,
+                    prompt = instruction,
+                    aspectRatio = state.selectedAspectRatio.value,
+                    imageSize = state.selectedImageSize.value
+                )
+            }.onFailure { e ->
+                _uiState.update { st ->
+                    st.copy(editSession = st.editSession.copy(
+                        turns = st.editSession.turns.map { t ->
+                            if (t.id == turnId) t.copy(error = e.message, isGenerating = false) else t
+                        },
+                        isGenerating = false
+                    ))
+                }
+                showToast("编辑失败: ${e.message}")
+            }
+        }
+    }
+
+    fun saveEditResultToAlbum(turn: EditTurn) {
+        val base64 = turn.resultImageBase64 ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSavingImage = true) }
+            // 通过内部存储路径保存（saveGeneratedImage已写入文件）
+            val internalPath = "${galleryRepo.getInternalDir()?.absolutePath}/${turn.id}.png"
+            val result = galleryRepo.saveToAlbum(turn.id, internalPath)
+            _uiState.update { it.copy(isSavingImage = false) }
+            result.onSuccess { showToast("图片已保存到相册") }
+                .onFailure { showToast("保存失败: ${it.message}") }
         }
     }
 

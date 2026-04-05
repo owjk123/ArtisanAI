@@ -155,7 +155,7 @@ private fun TabletLayout(
                         .height(48.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    listOf("当前预览", "图库").forEachIndexed { idx, label ->
+                    listOf("当前预览", "图片编辑", "图库").forEachIndexed { idx, label ->
                         Box(
                             modifier = Modifier
                                 .weight(1f)
@@ -168,7 +168,7 @@ private fun TabletLayout(
                                     label,
                                     style = ArtisanType.Label.copy(
                                         color = if (rightTab == idx) ArtisanColors.Champagne else ArtisanColors.TextMuted,
-                                        fontSize = 13.sp
+                                        fontSize = 12.sp
                                     )
                                 )
                                 if (rightTab == idx) {
@@ -191,11 +191,12 @@ private fun TabletLayout(
                 // 内容区
                 when (rightTab) {
                     0 -> PreviewPanel(uiState, modifier = Modifier.fillMaxSize())
-                    1 -> GalleryPanel(uiState, viewModel, columns = 3, modifier = Modifier.fillMaxSize())
+                    1 -> ImageEditPanel(uiState, viewModel, modifier = Modifier.fillMaxSize())
+                    2 -> GalleryPanel(uiState, viewModel, columns = 3, modifier = Modifier.fillMaxSize())
                 }
             }
 
-            // 右下角"加入队列"按钮（仅预览Tab显示）
+            // 右下角"加入队列"按钮（预览Tab显示）
             if (rightTab == 0) {
                 val count = uiState.selectedCount
                 val activeTaskCount = uiState.tasks.count {

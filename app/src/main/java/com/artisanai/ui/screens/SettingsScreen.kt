@@ -39,6 +39,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             .getString("agent_base_url", "") ?: ""
     ) }
     var agentKeyVisible by remember { mutableStateOf(false) }
+    var agentSystemPrompt by remember { mutableStateOf(ApiKeyManager.loadAgentSystemPrompt(context)) }
 
     var saved by remember { mutableStateOf(false) }
 
@@ -264,9 +265,32 @@ fun SettingsScreen(onBack: () -> Unit) {
                     ),
                     shape = RoundedCornerShape(6.dp)
                 )
+                Spacer(Modifier.height(12.dp))
+                Text("自定义系统提示词（AI优化 + 反推 共用）",
+                    style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 11.sp))
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = agentSystemPrompt,
+                    onValueChange = { agentSystemPrompt = it; saved = false },
+                    placeholder = { Text("附加指令，如：风格倾向写实/日系/电影感...", style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted)) },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = ArtisanType.Body.copy(fontSize = 13.sp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ArtisanColors.Champagne,
+                        unfocusedBorderColor = ArtisanColors.Steel,
+                        focusedTextColor = ArtisanColors.TextPrimary,
+                        unfocusedTextColor = ArtisanColors.TextPrimary,
+                        cursorColor = ArtisanColors.Champagne,
+                        focusedContainerColor = ArtisanColors.Graphite,
+                        unfocusedContainerColor = ArtisanColors.Graphite,
+                    ),
+                    shape = RoundedCornerShape(6.dp)
+                )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "用于 AI 优化提示词和反推提示词功能，使用不同模型/服务时可单独配置",
+                    "会追加到两个 Agent 的系统提示词末尾，留空则使用默认提示词。不同模型/服务时可单独配置地址",
                     style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 11.sp)
                 )
             }
@@ -279,6 +303,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     ApiKeyManager.saveBaseUrl(context, baseUrl.ifBlank { "https://api.apiyi.com" })
                     ApiKeyManager.saveAgentApiKey(context, agentKey)
                     ApiKeyManager.saveAgentBaseUrl(context, agentUrl)
+                    ApiKeyManager.saveAgentSystemPrompt(context, agentSystemPrompt)
                     saved = true
                 },
                 modifier = Modifier.fillMaxWidth(),

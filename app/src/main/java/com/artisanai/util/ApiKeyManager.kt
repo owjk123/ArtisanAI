@@ -70,4 +70,16 @@ object ApiKeyManager {
     }
 
     fun hasAgentKey(context: Context) = loadAgentApiKey(context).isNotBlank()
+
+    // ── Agent 自定义系统提示词（AI优化 + 反推 共用）────────
+    private const val KEY_AGENT_SYSTEM_PROMPT = "agent_system_prompt"
+
+    fun saveAgentSystemPrompt(context: Context, prompt: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(KEY_AGENT_SYSTEM_PROMPT, prompt).apply()
+    }
+
+    fun loadAgentSystemPrompt(context: Context): String =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_AGENT_SYSTEM_PROMPT, "") ?: ""
 }

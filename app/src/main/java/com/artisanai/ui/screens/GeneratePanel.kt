@@ -70,10 +70,11 @@ fun GeneratePanel(
 
         GoldDivider()
 
-        // ── 控件区（weight=1f 撑满，无滚动） ───────────
+        // ── 控件区（可滚动，防高级选项展开时挤压） ────────
         Column(
             modifier = Modifier
                 .weight(1f)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {

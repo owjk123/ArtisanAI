@@ -22,6 +22,8 @@ class GalleryRepository(
 ) {
     fun getAllImages(): Flow<List<GalleryImage>> = galleryDao.getAllImages()
 
+    fun getInternalDir(): File? = File(context.filesDir, "gallery").also { it.mkdirs() }
+
     /**
      * 保存Base64图片到内部存储，并插入图库数据库
      */

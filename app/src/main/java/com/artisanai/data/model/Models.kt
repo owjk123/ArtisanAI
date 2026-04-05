@@ -62,6 +62,23 @@ data class GenerateTask(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+// ── 图片编辑多轮对话 ───────────────────────────────────────
+data class EditTurn(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val userText: String,
+    val inputImageBase64: String? = null,   // 仅第一轮有（用户上传的源图）
+    val resultImageBase64: String? = null,  // 模型返回的结果图
+    val isGenerating: Boolean = false,
+    val error: String? = null
+)
+
+data class EditSession(
+    val turns: List<EditTurn> = emptyList(),
+    val sourceImageBase64: String? = null,  // 当前编辑的原始图（用户上传）
+    val instruction: String = "",           // 输入框文字
+    val isGenerating: Boolean = false
+)
+
 // ── Room 实体（本地图库持久化） ────────────────────────────
 @Entity(tableName = "gallery_images")
 data class GalleryImage(

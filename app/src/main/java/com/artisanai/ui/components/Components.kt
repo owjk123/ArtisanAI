@@ -1,3 +1,4 @@
+import androidx.compose.foundation.text.BasicTextField
 package com.artisanai.ui.components
 
 import androidx.compose.animation.*

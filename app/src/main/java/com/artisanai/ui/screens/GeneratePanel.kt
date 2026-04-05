@@ -116,11 +116,7 @@ fun GeneratePanel(
                         android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     }
                     bitmap?.let {
-                        androidx.compose.foundation.layout.Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = androidx.compose.ui.Alignment.Center
-                            ) { androidx.compose.ui.graphics.painter.BitmapPainter
-// FIXME
+                        Image(
                             bitmap = it.asImageBitmap(),
                             contentDescription = "参考图",
                             modifier = Modifier.fillMaxSize(),

@@ -1,5 +1,13 @@
 package com.artisanai.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
@@ -12,21 +20,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.artisanai.data.model.GalleryImage
 import com.artisanai.ui.components.*
 import com.artisanai.ui.theme.ArtisanColors
 import com.artisanai.ui.theme.ArtisanType
+import com.artisanai.ui.theme.sp
 import com.artisanai.viewmodel.MainUiState
 import com.artisanai.viewmodel.MainViewModel
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+
+enum class SortOrder { NEWEST, OLDEST, LARGEST }
 
 @Composable
 fun GalleryPanel(
@@ -35,6 +49,19 @@ fun GalleryPanel(
     columns: Int = 2,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    var sortOrder by remember { mutableStateOf(SortOrder.NEWEST) }
+    var multiSelectMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+
+    val sortedImages = remember(uiState.galleryImages, sortOrder) {
+        when (sortOrder) {
+            SortOrder.NEWEST -> uiState.galleryImages.sortedByDescending { it.createdAt }
+            SortOrder.OLDEST -> uiState.galleryImages.sortedBy { it.createdAt }
+            SortOrder.LARGEST -> uiState.galleryImages.sortedByDescending { it.imageSize }
+        }
+    }
+
     Column(modifier = modifier) {
         // 标题栏
         Row(
@@ -46,13 +73,116 @@ fun GalleryPanel(
         ) {
             Column {
                 Text("图库", style = ArtisanType.TitleGold)
-                Text("${uiState.galleryImages.size} 张作品", style = ArtisanType.Caption)
+                Text(
+                    if (multiSelectMode) "已选择 ${selectedIds.size} 张" else "${uiState.galleryImages.size} 张作品",
+                    style = ArtisanType.Caption
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                // 排序
+                Box {
+                    var showSort by remember { mutableStateOf(false) }
+                    IconButton(
+                        onClick = { showSort = true },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(ArtisanColors.Graphite)
+                    ) {
+                        Icon(Icons.Default.Sort, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(18.dp))
+                    }
+                    DropdownMenu(
+                        expanded = showSort,
+                        onDismissRequest = { showSort = false },
+                        modifier = Modifier.background(ArtisanColors.Onyx)
+                    ) {
+                        SortOrder.entries.forEach { order ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when (order) {
+                                            SortOrder.NEWEST -> "最新优先"
+                                            SortOrder.OLDEST -> "最早优先"
+                                            SortOrder.LARGEST -> "分辨率优先"
+                                        },
+                                        style = ArtisanType.Caption.copy(color = ArtisanColors.TextPrimary)
+                                    )
+                                },
+                                onClick = {
+                                    sortOrder = order
+                                    showSort = false
+                                },
+                                leadingIcon = {
+                                    if (sortOrder == order) {
+                                        Icon(Icons.Default.Check, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // 多选/取消
+                if (uiState.galleryImages.isNotEmpty()) {
+                    IconButton(
+                        onClick = {
+                            multiSelectMode = !multiSelectMode
+                            if (!multiSelectMode) selectedIds = emptySet()
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (multiSelectMode) ArtisanColors.Champagne else ArtisanColors.Graphite)
+                    ) {
+                        Icon(
+                            if (multiSelectMode) Icons.Default.Close else Icons.Default.Checklist,
+                            null,
+                            tint = if (multiSelectMode) ArtisanColors.Obsidian else ArtisanColors.TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 多选操作栏
+        AnimatedVisibility(visible = multiSelectMode && selectedIds.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlineGoldButton(
+                    text = "保存到相册 (${selectedIds.size})",
+                    onClick = {
+                        selectedIds.forEach { id ->
+                            uiState.galleryImages.find { it.id == id }?.let { viewModel.saveToAlbum(it) }
+                        }
+                        Toast.makeText(context, "已开始保存到相册", Toast.LENGTH_SHORT).show()
+                        multiSelectMode = false
+                        selectedIds = emptySet()
+                    },
+                    modifier = Modifier.weight(1f),
+                    icon = { Icon(Icons.Default.Download, null, modifier = Modifier.size(14.dp), tint = ArtisanColors.Champagne) }
+                )
+                OutlineGoldButton(
+                    text = "删除 (${selectedIds.size})",
+                    onClick = {
+                        selectedIds.mapNotNull { id -> uiState.galleryImages.find { it.id == id } }
+                            .forEach { viewModel.deleteGalleryImage(it) }
+                        multiSelectMode = false
+                        selectedIds = emptySet()
+                    },
+                    modifier = Modifier.weight(1f),
+                    icon = { Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(14.dp), tint = ArtisanColors.Error) }
+                )
             }
         }
 
         GoldDivider()
 
-        if (uiState.galleryImages.isEmpty()) {
+        if (sortedImages.isEmpty()) {
             EmptyGalleryState()
         } else {
             LazyVerticalGrid(
@@ -62,10 +192,28 @@ fun GalleryPanel(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(uiState.galleryImages, key = { it.id }) { image ->
+                items(sortedImages, key = { it.id }) { image ->
                     GalleryGridItem(
                         image = image,
-                        onClick = { viewModel.selectGalleryImage(image) }
+                        isSelected = selectedIds.contains(image.id),
+                        multiSelectMode = multiSelectMode,
+                        onClick = {
+                            if (multiSelectMode) {
+                                selectedIds = if (selectedIds.contains(image.id)) {
+                                    selectedIds - image.id
+                                } else {
+                                    selectedIds + image.id
+                                }
+                            } else {
+                                viewModel.selectGalleryImage(image)
+                            }
+                        },
+                        onLongClick = {
+                            if (!multiSelectMode) {
+                                multiSelectMode = true
+                                selectedIds = setOf(image.id)
+                            }
+                        }
                     )
                 }
             }
@@ -81,19 +229,57 @@ fun GalleryPanel(
             onDelete = {
                 viewModel.deleteGalleryImage(image)
                 viewModel.selectGalleryImage(null)
+            },
+            onCopyPrompt = {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("prompt", image.prompt))
+                Toast.makeText(context, "提示词已复制", Toast.LENGTH_SHORT).show()
+            },
+            onShare = {
+                try {
+                    val f = File(image.imagePath)
+                    if (f.exists()) {
+                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", f)
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "image/png"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(share, "分享图片"))
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "分享失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
             }
         )
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GalleryGridItem(image: GalleryImage, onClick: () -> Unit) {
+private fun GalleryGridItem(
+    image: GalleryImage,
+    isSelected: Boolean,
+    multiSelectMode: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
             .clip(RoundedCornerShape(6.dp))
             .background(ArtisanColors.Graphite)
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .then(
+                if (isSelected) Modifier.border(
+                    2.dp,
+                    ArtisanColors.Champagne,
+                    RoundedCornerShape(6.dp)
+                ) else Modifier
+            )
     ) {
         AsyncImage(
             model = File(image.imagePath),
@@ -102,7 +288,31 @@ private fun GalleryGridItem(image: GalleryImage, onClick: () -> Unit) {
             contentScale = ContentScale.Crop
         )
 
-        // 底部信息渐变覆盖
+        // 多选勾选
+        if (multiSelectMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(
+                        if (isSelected) ArtisanColors.Champagne else ArtisanColors.Obsidian.copy(alpha = 0.6f)
+                    )
+                    .border(1.dp, ArtisanColors.Champagne, RoundedCornerShape(4.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(
+                        Icons.Default.Check, null,
+                        tint = ArtisanColors.Obsidian,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
+
+        // 底部信息
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -124,6 +334,25 @@ private fun GalleryGridItem(image: GalleryImage, onClick: () -> Unit) {
                 .align(Alignment.BottomStart)
                 .padding(6.dp)
         )
+
+        // 已保存到相册标记
+        if (image.savedToAlbum) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .size(18.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(ArtisanColors.Success.copy(alpha = 0.8f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Download, null,
+                    tint = Color.White,
+                    modifier = Modifier.size(10.dp)
+                )
+            }
+        }
     }
 }
 
@@ -144,7 +373,9 @@ private fun ImageDetailDialog(
     image: GalleryImage,
     onDismiss: () -> Unit,
     onSaveToAlbum: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onCopyPrompt: () -> Unit,
+    onShare: () -> Unit
 ) {
     val dateStr = remember(image.createdAt) {
         SimpleDateFormat("yyyy·MM·dd  HH:mm", Locale.getDefault()).format(Date(image.createdAt))
@@ -177,6 +408,24 @@ private fun ImageDetailDialog(
                 Text(dateStr, style = ArtisanType.Caption)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     IconButton(
+                        onClick = onCopyPrompt,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ArtisanColors.Graphite)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(
+                        onClick = onShare,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ArtisanColors.GoldMist)
+                    ) {
+                        Icon(Icons.Default.Share, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(
                         onClick = onSaveToAlbum,
                         modifier = Modifier
                             .size(36.dp)
@@ -199,17 +448,21 @@ private fun ImageDetailDialog(
 
             GoldDivider()
 
-            // 图片
+            // 图片（可滚动）
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(ArtisanColors.Obsidian)
+                    .background(ArtisanColors.Obsidian),
+                contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
                     model = File(image.imagePath),
                     contentDescription = image.prompt,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .horizontalScroll(rememberScrollState())
+                        .verticalScroll(rememberScrollState()),
                     contentScale = ContentScale.Fit
                 )
             }
@@ -231,7 +484,7 @@ private fun ImageDetailDialog(
                     InfoChip("比例", image.aspectRatio)
                     InfoChip("分辨率", image.imageSize)
                     if (image.savedToAlbum) {
-                        InfoChip("状态", "已保存到相册")
+                        InfoChip("状态", "已保存")
                     }
                 }
             }
@@ -248,13 +501,21 @@ private fun ImageDetailDialog(
             title = { Text("删除确认", style = ArtisanType.TitleGold) },
             text = { Text("确定要删除这张图片吗？此操作不可撤销。") },
             confirmButton = {
-                GoldButton("删除", onClick = {
-                    showDeleteConfirm = false
-                    onDelete()
-                }, modifier = Modifier.width(80.dp))
+                GoldButton(
+                    "删除",
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    },
+                    modifier = Modifier.width(80.dp)
+                )
             },
             dismissButton = {
-                OutlineGoldButton("取消", onClick = { showDeleteConfirm = false }, modifier = Modifier.width(80.dp))
+                OutlineGoldButton(
+                    "取消",
+                    onClick = { showDeleteConfirm = false },
+                    modifier = Modifier.width(80.dp)
+                )
             }
         )
     }
@@ -274,6 +535,3 @@ private fun InfoChip(label: String, value: String) {
         Text(value, style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 10.sp))
     }
 }
-
-private val Int.sp get() = androidx.compose.ui.unit.TextUnit(this.toFloat(), androidx.compose.ui.unit.TextUnitType.Sp)
-private val Float.sp get() = androidx.compose.ui.unit.TextUnit(this, androidx.compose.ui.unit.TextUnitType.Sp)

@@ -13,7 +13,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.artisanai.data.model.TaskStatus
 import com.artisanai.ui.components.GoldDivider
 import com.artisanai.ui.components.GoldGradient
@@ -21,6 +24,7 @@ import com.artisanai.ui.theme.ArtisanColors
 import com.artisanai.ui.theme.ArtisanType
 import com.artisanai.viewmodel.MainUiState
 import com.artisanai.viewmodel.MainViewModel
+import java.io.File
 
 @Composable
 fun MainScreen(
@@ -31,7 +35,6 @@ fun MainScreen(
     val isWideScreen = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
     var showSettings by remember { mutableStateOf(false) }
 
-    // Toast
     uiState.toastMessage?.let { msg ->
         LaunchedEffect(msg) {
             kotlinx.coroutines.delay(2500)
@@ -55,18 +58,21 @@ fun MainScreen(
             PhoneLayout(uiState, viewModel, onSettings = { showSettings = true })
         }
 
-        // Toast
+        // Toast 消息（居中显示，不被按钮遮挡）
         AnimatedVisibility(
             visible = uiState.toastMessage != null,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 100.dp)
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 12.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(20.dp))
                     .background(ArtisanColors.Charcoal)
-                    .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(6.dp))
+                    .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(20.dp))
                     .padding(horizontal = 20.dp, vertical = 10.dp)
             ) {
                 Text(uiState.toastMessage ?: "", style = ArtisanType.Caption)
@@ -75,84 +81,240 @@ fun MainScreen(
     }
 }
 
-// ── 平板横屏：左右三栏 ────────────────────────────────────
+// ── 平板横屏：左右两栏 ────────────────────────────────────
 @Composable
 private fun TabletLayout(
     uiState: MainUiState,
     viewModel: MainViewModel,
     onSettings: () -> Unit
 ) {
+    var rightTab by remember { mutableIntStateOf(0) } // 0=预览 1=图库
+
     Row(modifier = Modifier.fillMaxSize()) {
-        // 左栏：生成控制 360dp
+        // 左栏 40%：控制面板
         Column(
             modifier = Modifier
-                .width(360.dp)
+                .weight(0.4f)
                 .fillMaxHeight()
                 .background(ArtisanColors.Onyx)
         ) {
-            // 设置图标
-            TabletTopBar(onSettings)
+            // 顶栏
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("ARTISAN AI", style = ArtisanType.TitleGold)
+                    Text(
+                        "IMAGE STUDIO",
+                        style = ArtisanType.Label.copy(color = ArtisanColors.TextMuted, letterSpacing = 3.sp)
+                    )
+                }
+                IconButton(
+                    onClick = onSettings,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(ArtisanColors.Graphite)
+                ) {
+                    Icon(Icons.Default.Settings, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(16.dp))
+                }
+            }
+
             GoldDivider()
-            GeneratePanel(uiState, viewModel, Modifier.fillMaxSize())
+
+            GeneratePanel(
+                uiState = uiState,
+                viewModel = viewModel,
+                modifier = Modifier.fillMaxSize(),
+                isTablet = true
+            )
         }
 
-        // 竖分割线
+        // 分割线
         Box(modifier = Modifier.fillMaxHeight().width(1.dp).background(ArtisanColors.Steel))
 
-        // 中栏：任务队列 300dp
-        Column(
+        // 右栏 60%：预览 + 图库
+        Box(
             modifier = Modifier
-                .width(300.dp)
+                .weight(0.6f)
                 .fillMaxHeight()
                 .background(ArtisanColors.Obsidian)
         ) {
-            TaskQueuePanel(uiState, viewModel, Modifier.fillMaxSize())
-        }
+            Column(modifier = Modifier.fillMaxSize()) {
+                // 右栏顶部 Tab
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .background(ArtisanColors.Onyx)
+                        .height(48.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    listOf("当前预览", "图库").forEachIndexed { idx, label ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable { rightTab = idx },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    label,
+                                    style = ArtisanType.Label.copy(
+                                        color = if (rightTab == idx) ArtisanColors.Champagne else ArtisanColors.TextMuted,
+                                        fontSize = 13.sp
+                                    )
+                                )
+                                if (rightTab == idx) {
+                                    Spacer(Modifier.height(2.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .width(28.dp)
+                                            .height(2.dp)
+                                            .clip(RoundedCornerShape(1.dp))
+                                            .background(GoldGradient)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
 
-        Box(modifier = Modifier.fillMaxHeight().width(1.dp).background(ArtisanColors.Steel))
+                GoldDivider()
 
-        // 右栏：图库（自适应剩余空间）
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .background(ArtisanColors.Obsidian)
-        ) {
-            GalleryPanel(uiState, viewModel, columns = 3, Modifier.fillMaxSize())
+                // 内容区
+                when (rightTab) {
+                    0 -> PreviewPanel(uiState, modifier = Modifier.fillMaxSize())
+                    1 -> GalleryPanel(uiState, viewModel, columns = 3, modifier = Modifier.fillMaxSize())
+                }
+            }
+
+            // 右下角"加入队列"按钮（仅预览Tab显示）
+            if (rightTab == 0) {
+                val count = uiState.selectedCount
+                val activeTaskCount = uiState.tasks.count {
+                    it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(24.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(ArtisanColors.Charcoal)
+                            .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(28.dp))
+                            .clickable { viewModel.addGenerateTask() }
+                            .padding(horizontal = 24.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.Add, null, tint = ArtisanColors.TextPrimary, modifier = Modifier.size(18.dp))
+                        Text(
+                            "加入队列 ($count 个)",
+                            style = ArtisanType.Label.copy(color = ArtisanColors.TextPrimary, fontSize = 14.sp)
+                        )
+                        if (activeTaskCount > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(ArtisanColors.Champagne),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("$activeTaskCount", style = ArtisanType.Caption.copy(color = ArtisanColors.Obsidian, fontSize = 10.sp))
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
+// ── 预览面板：显示最新生成图 ─────────────────────────────
 @Composable
-private fun TabletTopBar(onSettings: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column {
-            Text("ARTISAN AI", style = ArtisanType.TitleGold)
-            Text("IMAGE STUDIO", style = ArtisanType.Label.copy(
-                color = ArtisanColors.TextMuted,
-                letterSpacing = 3.sp
-            ))
+private fun PreviewPanel(uiState: MainUiState, modifier: Modifier = Modifier) {
+    val latestSuccess = uiState.tasks.lastOrNull { it.status == TaskStatus.SUCCESS }
+    val processing = uiState.tasks.filter { it.status == TaskStatus.PROCESSING }
+
+    Box(modifier = modifier.background(ArtisanColors.Obsidian)) {
+        if (latestSuccess?.resultImagePath != null) {
+            AsyncImage(
+                model = File(latestSuccess.resultImagePath),
+                contentDescription = latestSuccess.prompt,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            // 占位符
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    Icons.Default.Image,
+                    null,
+                    tint = ArtisanColors.TextMuted,
+                    modifier = Modifier.size(56.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("生成的图片将显示在这里", style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted))
+            }
         }
-        IconButton(
-            onClick = onSettings,
-            modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(ArtisanColors.Graphite)
-        ) {
-            Icon(Icons.Default.Settings, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(18.dp))
+
+        // 进行中的任务进度条
+        if (processing.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(ArtisanColors.Obsidian.copy(alpha = 0.85f))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                processing.take(3).forEach { task ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 1.5.dp,
+                            color = ArtisanColors.Champagne
+                        )
+                        Text(
+                            "生成中... ${(task.progress * 100).toInt()}%",
+                            style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 11.sp)
+                        )
+                        LinearProgressIndicator(
+                            progress = { task.progress },
+                            modifier = Modifier.weight(1f).height(2.dp).clip(RoundedCornerShape(1.dp)),
+                            color = ArtisanColors.Champagne,
+                            trackColor = ArtisanColors.Graphite
+                        )
+                    }
+                }
+                if (processing.size > 3) {
+                    Text(
+                        "还有 ${processing.size - 3} 个任务排队中",
+                        style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 10.sp)
+                    )
+                }
+            }
         }
     }
 }
 
-// ── 手机竖屏：底部Tab ─────────────────────────────────────
+// ── 手机竖屏：底部 Tab ────────────────────────────────────
 @Composable
 private fun PhoneLayout(
     uiState: MainUiState,
@@ -162,74 +324,98 @@ private fun PhoneLayout(
     var selectedTab by remember { mutableIntStateOf(0) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 顶部栏（仅手机）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(ArtisanColors.Onyx)
                 .statusBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
                 Text("ARTISAN AI", style = ArtisanType.TitleGold)
-                Text("IMAGE STUDIO", style = ArtisanType.Label.copy(
-                    color = ArtisanColors.TextMuted, letterSpacing = 3.sp
-                ))
+                Text("IMAGE STUDIO", style = ArtisanType.Label.copy(color = ArtisanColors.TextMuted, letterSpacing = 3.sp))
             }
             IconButton(
                 onClick = onSettings,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(ArtisanColors.Graphite)
+                modifier = Modifier.size(34.dp).clip(RoundedCornerShape(6.dp)).background(ArtisanColors.Graphite)
             ) {
-                Icon(Icons.Default.Settings, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Settings, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(16.dp))
             }
         }
         GoldDivider()
 
-        // 内容区
         Box(modifier = Modifier.weight(1f)) {
             when (selectedTab) {
-                0 -> GeneratePanel(uiState, viewModel, Modifier.fillMaxSize())
-                1 -> TaskQueuePanel(uiState, viewModel, Modifier.fillMaxSize())
-                2 -> GalleryPanel(uiState, viewModel, columns = 2, Modifier.fillMaxSize())
+                0 -> PhoneGenerateWithButton(uiState, viewModel)
+                1 -> GalleryPanel(uiState, viewModel, columns = 2, modifier = Modifier.fillMaxSize())
             }
         }
 
-        // 底部导航
         GoldDivider()
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(ArtisanColors.Onyx)
                 .navigationBarsPadding()
-                .height(64.dp),
+                .height(60.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             BottomNavItem(Icons.Default.AutoAwesome, "生成", selectedTab == 0) { selectedTab = 0 }
+            BottomNavItem(Icons.Default.PhotoLibrary, "图库", selectedTab == 1) { selectedTab = 1 }
+        }
+    }
+}
 
-            // 任务tab带徽章
-            val activeTasks = uiState.tasks.count {
-                it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
-            }
-            BadgedBox(
-                badge = {
-                    if (activeTasks > 0) {
-                        Badge(
-                            containerColor = ArtisanColors.Champagne,
-                            contentColor = ArtisanColors.Obsidian
-                        ) { Text("$activeTasks", style = ArtisanType.Caption.copy(fontSize = 9.sp)) }
-                    }
-                }
+// 手机生成页：面板 + 底部固定按钮
+@Composable
+private fun PhoneGenerateWithButton(uiState: MainUiState, viewModel: MainViewModel) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            GeneratePanel(
+                uiState = uiState,
+                viewModel = viewModel,
+                modifier = Modifier.weight(1f),
+                isTablet = false
+            )
+            // 占位，防止内容被按钮遮挡
+            Spacer(Modifier.height(72.dp))
+        }
+
+        // 加入队列按钮（固定底部）
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(ArtisanColors.Onyx)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val count = uiState.selectedCount
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(ArtisanColors.Charcoal)
+                    .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(8.dp))
+                    .clickable { viewModel.addGenerateTask() },
+                contentAlignment = Alignment.Center
             ) {
-                BottomNavItem(Icons.Default.PlaylistPlay, "任务", selectedTab == 1) { selectedTab = 1 }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.Add, null, tint = ArtisanColors.TextPrimary, modifier = Modifier.size(16.dp))
+                    Text(
+                        "加入队列 ($count 个)",
+                        style = ArtisanType.Label.copy(color = ArtisanColors.TextPrimary, fontSize = 14.sp)
+                    )
+                }
             }
-
-            BottomNavItem(Icons.Default.PhotoLibrary, "图库", selectedTab == 2) { selectedTab = 2 }
         }
     }
 }
@@ -245,7 +431,7 @@ private fun BottomNavItem(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 24.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {

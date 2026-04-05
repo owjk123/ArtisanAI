@@ -76,6 +76,8 @@ fun GalleryPanel(
     uiState.selectedGalleryImage?.let { image ->
         ImageDetailDialog(
             image = image,
+            isSaving = uiState.isSavingImage,
+            savedToAlbum = image.savedToAlbum,
             onDismiss = { viewModel.selectGalleryImage(null) },
             onSaveToAlbum = { viewModel.saveToAlbum(image) },
             onDelete = {
@@ -142,6 +144,8 @@ private fun EmptyGalleryState() {
 @Composable
 private fun ImageDetailDialog(
     image: GalleryImage,
+    isSaving: Boolean,
+    savedToAlbum: Boolean,
     onDismiss: () -> Unit,
     onSaveToAlbum: () -> Unit,
     onDelete: () -> Unit
@@ -177,13 +181,26 @@ private fun ImageDetailDialog(
                 Text(dateStr, style = ArtisanType.Caption)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     IconButton(
-                        onClick = onSaveToAlbum,
+                        onClick = { if (!isSaving && !savedToAlbum) onSaveToAlbum() },
                         modifier = Modifier
                             .size(36.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(ArtisanColors.GoldMist)
+                            .background(
+                                when {
+                                    savedToAlbum -> ArtisanColors.Success.copy(alpha = 0.2f)
+                                    else -> ArtisanColors.GoldMist
+                                }
+                            )
                     ) {
-                        Icon(Icons.Default.Download, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(18.dp))
+                        when {
+                            isSaving -> CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 1.5.dp,
+                                color = ArtisanColors.Champagne
+                            )
+                            savedToAlbum -> Icon(Icons.Default.Check, null, tint = ArtisanColors.Success, modifier = Modifier.size(18.dp))
+                            else -> Icon(Icons.Default.Download, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(18.dp))
+                        }
                     }
                     IconButton(
                         onClick = { showDeleteConfirm = true },

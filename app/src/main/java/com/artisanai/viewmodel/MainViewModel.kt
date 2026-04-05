@@ -24,11 +24,16 @@ data class MainUiState(
     val selectedImageSize: ImageSize = ImageSize.SIZE_2K,
     val selectedThinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL,
     val useGrounding: Boolean = false,
-    val referenceImageBase64: String? = null,  // 用于图生图的参考图
+    val referenceImageBase64: String? = null,  // 风格参考图（图生图）
+    val reverseImageBase64: String? = null,    // 反推分析图（提取提示词用）
 
     // Agent状态
     val isPolishing: Boolean = false,
     val isReversingPrompt: Boolean = false,
+    val isSavingImage: Boolean = false,
+
+    // 生成数量
+    val selectedCount: Int = 1,
 
     // 任务队列
     val tasks: List<GenerateTask> = emptyList(),
@@ -85,6 +90,18 @@ class MainViewModel(
         _uiState.update { it.copy(referenceImageBase64 = null) }
     }
 
+    fun setReverseImage(base64: String?) {
+        _uiState.update { it.copy(reverseImageBase64 = base64) }
+    }
+
+    fun clearReverseImage() {
+        _uiState.update { it.copy(reverseImageBase64 = null) }
+    }
+
+    fun selectCount(count: Int) {
+        _uiState.update { it.copy(selectedCount = count) }
+    }
+
     fun selectGalleryImage(image: com.artisanai.data.model.GalleryImage?) {
         _uiState.update { it.copy(selectedGalleryImage = image) }
     }
@@ -113,9 +130,9 @@ class MainViewModel(
 
     // ── Agent：反推参考图提示词 ────────────────────────────
     fun reversePromptFromImage() {
-        val imageBase64 = _uiState.value.referenceImageBase64
+        val imageBase64 = _uiState.value.reverseImageBase64 ?: _uiState.value.referenceImageBase64
         if (imageBase64 == null) {
-            showToast("请先选择参考图片")
+            showToast("请先上传反推参考图")
             return
         }
         viewModelScope.launch {
@@ -141,28 +158,30 @@ class MainViewModel(
             showToast("请输入提示词")
             return
         }
-        if (state.tasks.count { it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING } >= 10) {
+        val activeCount = state.tasks.count { it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING }
+        if (activeCount + state.selectedCount > 10) {
             showToast("任务队列已满（最多10个并发）")
             return
         }
 
-        // 合并用户提示词和参考提示词
         val finalPrompt = buildFinalPrompt(userPrompt, state.referencePrompt)
 
-        val task = GenerateTask(
-            id = UUID.randomUUID().toString(),
-            prompt = finalPrompt,
-            referencePrompt = state.referencePrompt,
-            aspectRatio = state.selectedAspectRatio,
-            imageSize = state.selectedImageSize,
-            thinkingLevel = state.selectedThinkingLevel,
-            useGrounding = state.useGrounding,
-            referenceImageBase64 = state.referenceImageBase64,
-            status = TaskStatus.QUEUED
-        )
-
-        _uiState.update { it.copy(tasks = it.tasks + task) }
-        launchTaskExecution(task)
+        repeat(state.selectedCount) {
+            val task = GenerateTask(
+                id = UUID.randomUUID().toString(),
+                prompt = finalPrompt,
+                referencePrompt = state.referencePrompt,
+                aspectRatio = state.selectedAspectRatio,
+                imageSize = state.selectedImageSize,
+                thinkingLevel = state.selectedThinkingLevel,
+                useGrounding = state.useGrounding,
+                referenceImageBase64 = state.referenceImageBase64,
+                status = TaskStatus.QUEUED
+            )
+            _uiState.update { it.copy(tasks = it.tasks + task) }
+            launchTaskExecution(task)
+        }
+        if (state.selectedCount > 1) showToast("已加入 ${state.selectedCount} 个任务")
     }
 
     private fun buildFinalPrompt(userPrompt: String, referencePrompt: String): String {
@@ -257,8 +276,10 @@ class MainViewModel(
     // ── 图库操作 ───────────────────────────────────────────
     fun saveToAlbum(image: com.artisanai.data.model.GalleryImage) {
         viewModelScope.launch {
+            _uiState.update { it.copy(isSavingImage = true) }
             val result = galleryRepo.saveToAlbum(image.id, image.imagePath)
-            result.onSuccess { showToast("已保存到相册") }
+            _uiState.update { it.copy(isSavingImage = false) }
+            result.onSuccess { showToast("图片已保存到相册") }
                 .onFailure { showToast("保存失败: ${it.message}") }
         }
     }

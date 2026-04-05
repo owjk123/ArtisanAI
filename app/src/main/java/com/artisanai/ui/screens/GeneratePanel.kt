@@ -14,12 +14,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.artisanai.data.model.*
 import com.artisanai.ui.components.*
 import com.artisanai.ui.theme.ArtisanColors
@@ -27,261 +33,547 @@ import com.artisanai.ui.theme.ArtisanType
 import com.artisanai.viewmodel.MainUiState
 import com.artisanai.viewmodel.MainViewModel
 
+private enum class GenerateMode { DIRECT, REVERSE }
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GeneratePanel(
     uiState: MainUiState,
     viewModel: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isTablet: Boolean = true
 ) {
     val context = LocalContext.current
-    val scrollState = rememberScrollState()
+    var mode by remember { mutableStateOf(GenerateMode.DIRECT) }
 
-    // 图片选择器
-    val imagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            val inputStream = context.contentResolver.openInputStream(it) ?: return@let
-            val rawBytes = inputStream.readBytes()
-            // 解码原始图片，压缩到最大边1280px，减少内存占用和API传输量
-            val original = android.graphics.BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
-                ?: return@let
-            val maxDim = 1280
-            val scale = if (original.width > maxDim || original.height > maxDim) {
-                maxDim.toFloat() / maxOf(original.width, original.height)
-            } else 1f
-            val bitmap = if (scale < 1f) {
-                android.graphics.Bitmap.createScaledBitmap(
-                    original,
-                    (original.width * scale).toInt(),
-                    (original.height * scale).toInt(),
-                    true
-                ).also { original.recycle() }
-            } else original
-            val out = java.io.ByteArrayOutputStream()
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
-            bitmap.recycle()
-            val base64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
-            viewModel.setReferenceImage(base64)
-        }
+    // 参考图选择器（风格参考）
+    val refImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let { viewModel.setReferenceImage(compressImage(context, it)) }
+    }
+    // 反推图选择器（分析用）
+    val reverseImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let { viewModel.setReverseImage(compressImage(context, it)) }
     }
 
-    Column(
-        modifier = modifier
-            .verticalScroll(scrollState)
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
-    ) {
-        // ── App 标题 ─────────────────────────────────────
-        Column {
-            Text("ARTISAN", style = ArtisanType.DisplayLarge.copy(
-                color = ArtisanColors.Champagne,
-                letterSpacing = 8.sp
-            ))
-            Text("AI IMAGE STUDIO", style = ArtisanType.Label.copy(
-                color = ArtisanColors.TextMuted,
-                letterSpacing = 4.sp
-            ))
+    Column(modifier = modifier) {
+        // ── 模式 Tab ─────────────────────────────────────
+        ModeTabs(mode) { mode = it }
+
+        GoldDivider()
+
+        // ── 控件区（无滚动，权重撑满） ──────────────────
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (mode == GenerateMode.REVERSE) {
+                // 反推图上传
+                UploadSection(
+                    label = "反推参考图",
+                    counter = if (uiState.reverseImageBase64 != null) "1/1" else "0/1",
+                    imageBase64 = uiState.reverseImageBase64,
+                    placeholder = "上传反推图片",
+                    onPick = { reverseImagePicker.launch("image/*") },
+                    onClear = viewModel::clearReverseImage,
+                    extraAction = if (uiState.reverseImageBase64 != null) {
+                        {
+                            TextButton(
+                                onClick = viewModel::reversePromptFromImage,
+                                enabled = !uiState.isReversingPrompt
+                            ) {
+                                if (uiState.isReversingPrompt) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 1.5.dp,
+                                        color = ArtisanColors.Champagne
+                                    )
+                                } else {
+                                    Icon(Icons.Default.ImageSearch, null, modifier = Modifier.size(14.dp), tint = ArtisanColors.Champagne)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("AI 反推", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne))
+                                }
+                            }
+                        }
+                    } else null
+                )
+            }
+
+            // 参考图上传
+            UploadSection(
+                label = "参考图 (点击插入 <图N>)",
+                counter = if (uiState.referenceImageBase64 != null) "1/5" else "0/5",
+                imageBase64 = uiState.referenceImageBase64,
+                placeholder = "上传参考图（生成风格参考）",
+                onPick = { refImagePicker.launch("image/*") },
+                onClear = viewModel::clearReferenceImage
+            )
+
+            // ── 提示词 + AI优化 ──────────────────────────
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("提示词", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
+                    TextButton(
+                        onClick = viewModel::polishPrompt,
+                        enabled = !uiState.isPolishing && uiState.userPrompt.isNotBlank(),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        if (uiState.isPolishing) {
+                            CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp, color = ArtisanColors.Champagne)
+                        } else {
+                            Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(12.dp), tint = ArtisanColors.Champagne)
+                            Spacer(Modifier.width(3.dp))
+                            Text("AI 优化", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
+                        }
+                    }
+                }
+                PromptTextField(
+                    value = uiState.userPrompt,
+                    onValueChange = viewModel::updateUserPrompt,
+                    placeholder = "描述你想生成的图片...",
+                    minLines = if (mode == GenerateMode.REVERSE) 2 else 3,
+                    maxLines = if (mode == GenerateMode.REVERSE) 3 else 5
+                )
+            }
+
+            // ── 分辨率 + 宽高比（并排） ──────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // 分辨率
+                CompactDropdown(
+                    label = "分辨率",
+                    options = ImageSize.entries,
+                    selected = uiState.selectedImageSize,
+                    onSelect = viewModel::selectImageSize,
+                    displayText = { it.label },
+                    modifier = Modifier.weight(1f)
+                )
+                // 宽高比
+                CompactDropdown(
+                    label = "宽高比",
+                    options = AspectRatio.entries,
+                    selected = uiState.selectedAspectRatio,
+                    onSelect = viewModel::selectAspectRatio,
+                    displayText = { it.label },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // ── 高级选项（折叠） ─────────────────────────
+            AdvancedOptions(uiState, viewModel)
         }
 
         GoldDivider()
 
-        // ── 用户主提示词 ──────────────────────────────────
-        ArtisanCard {
-            SectionLabel("描述 · PROMPT")
-            Spacer(Modifier.height(12.dp))
-            ArtisanTextField(
-                value = uiState.userPrompt,
-                onValueChange = viewModel::updateUserPrompt,
-                placeholder = "描述您想要的画面...",
-                minLines = 3,
-                maxLines = 5
-            )
-            Spacer(Modifier.height(12.dp))
-            OutlineGoldButton(
-                text = "AI 润色提示词",
-                onClick = viewModel::polishPrompt,
-                isLoading = uiState.isPolishing,
-                modifier = Modifier.fillMaxWidth(),
-                icon = {
-                    Icon(
-                        Icons.Default.AutoFixHigh,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                        tint = ArtisanColors.Champagne
-                    )
-                }
-            )
-        }
-
-        // ── 参考图 + 反推提示词 ──────────────────────────
-        ArtisanCard {
-            SectionLabel("参考图 · REFERENCE")
-            Spacer(Modifier.height(12.dp))
-
-            // 参考图预览
-            if (uiState.referenceImageBase64 != null) {
+        // ── 数量选择（固定底部） ─────────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("数量", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
+            listOf(1, 3, 5, 10).forEach { count ->
+                val selected = uiState.selectedCount == count
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp)
+                        .size(40.dp)
                         .clip(RoundedCornerShape(6.dp))
-                        .background(ArtisanColors.Graphite)
-                ) {
-                    val bitmap = remember(uiState.referenceImageBase64) {
-                        val bytes = android.util.Base64.decode(
-                            uiState.referenceImageBase64, android.util.Base64.NO_WRAP
+                        .background(
+                            if (selected) ArtisanColors.Charcoal
+                            else Color.Transparent
                         )
-                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    }
-                    bitmap?.let {
-                        Image(
-                            bitmap = it.asImageBitmap(),
-                            contentDescription = "参考图",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
+                        .border(
+                            1.dp,
+                            if (selected) ArtisanColors.Champagne else ArtisanColors.Steel,
+                            RoundedCornerShape(6.dp)
                         )
-                    }
-                    // 清除按钮
-                    IconButton(
-                        onClick = viewModel::clearReferenceImage,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(4.dp)
-                            .size(28.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(ArtisanColors.Obsidian.copy(alpha = 0.7f))
-                    ) {
-                        Icon(Icons.Default.Close, null, tint = ArtisanColors.TextPrimary, modifier = Modifier.size(16.dp))
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                OutlineGoldButton(
-                    text = "AI 反推提示词",
-                    onClick = viewModel::reversePromptFromImage,
-                    isLoading = uiState.isReversingPrompt,
-                    modifier = Modifier.fillMaxWidth(),
-                    icon = {
-                        Icon(Icons.Default.ImageSearch, null, modifier = Modifier.size(14.dp), tint = ArtisanColors.Champagne)
-                    }
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(ArtisanColors.Graphite)
-                        .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(6.dp))
-                        .clickable { imagePicker.launch("image/*") },
+                        .clickable { viewModel.selectCount(count) },
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.AddPhotoAlternate, null, tint = ArtisanColors.TextMuted, modifier = Modifier.size(28.dp))
-                        Spacer(Modifier.height(6.dp))
-                        Text("点击选择参考图（可选）", style = ArtisanType.Caption)
+                    Text(
+                        "$count",
+                        style = ArtisanType.Label.copy(
+                            color = if (selected) ArtisanColors.Champagne else ArtisanColors.TextSecondary,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── 模式 Tab 栏 ──────────────────────────────────────────
+@Composable
+private fun ModeTabs(mode: GenerateMode, onSelect: (GenerateMode) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        GenerateMode.entries.forEach { m ->
+            val selected = m == mode
+            val label = if (m == GenerateMode.DIRECT) "直接生图" else "反推生图"
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onSelect(m) }
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        label,
+                        style = ArtisanType.Label.copy(
+                            color = if (selected) ArtisanColors.Champagne else ArtisanColors.TextMuted,
+                            fontSize = 13.sp
+                        )
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    AnimatedVisibility(visible = selected) {
+                        Box(
+                            modifier = Modifier
+                                .width(32.dp)
+                                .height(2.dp)
+                                .clip(RoundedCornerShape(1.dp))
+                                .background(GoldGradient)
+                        )
                     }
                 }
             }
         }
-
-        // ── 参考提示词（润色/反推结果）──────────────────
-        AnimatedVisibility(visible = uiState.referencePrompt.isNotBlank()) {
-            ArtisanCard {
-                SectionLabel("参考提示词 · REFERENCE PROMPT")
-                Spacer(Modifier.height(12.dp))
-                ArtisanTextField(
-                    value = uiState.referencePrompt,
-                    onValueChange = viewModel::updateReferencePrompt,
-                    placeholder = "AI生成的参考提示词（可编辑）",
-                    minLines = 2,
-                    maxLines = 4
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "此提示词将与您的描述合并后用于生图",
-                    style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted)
-                )
-            }
-        }
-
-        // ── 参数设置 ──────────────────────────────────────
-        ArtisanCard {
-            SectionLabel("生成参数 · PARAMETERS")
-            Spacer(Modifier.height(16.dp))
-
-            // 宽高比
-            Text("宽高比", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
-            Spacer(Modifier.height(8.dp))
-            ChipSelector(
-                options = AspectRatio.entries,
-                selected = uiState.selectedAspectRatio,
-                onSelect = viewModel::selectAspectRatio,
-                label = { it.label }
-            )
-
-            Spacer(Modifier.height(14.dp))
-
-            // 分辨率
-            Text("分辨率", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
-            Spacer(Modifier.height(8.dp))
-            ChipSelector(
-                options = ImageSize.entries,
-                selected = uiState.selectedImageSize,
-                onSelect = viewModel::selectImageSize,
-                label = { it.label }
-            )
-
-            Spacer(Modifier.height(14.dp))
-
-            // 思维模式
-            Text("思维模式", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
-            Spacer(Modifier.height(8.dp))
-            ChipSelector(
-                options = ThinkingLevel.entries,
-                selected = uiState.selectedThinkingLevel,
-                onSelect = viewModel::selectThinkingLevel,
-                label = { it.label }
-            )
-
-            Spacer(Modifier.height(14.dp))
-
-            // Grounding 开关
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text("图像搜索增强", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
-                    Text("参考真实图像生成", style = ArtisanType.Caption.copy(
-                        color = ArtisanColors.TextMuted,
-                        fontSize = 10.sp
-                    ))
-                }
-                Switch(
-                    checked = uiState.useGrounding,
-                    onCheckedChange = { viewModel.toggleGrounding() },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = ArtisanColors.Obsidian,
-                        checkedTrackColor = ArtisanColors.Champagne,
-                        uncheckedThumbColor = ArtisanColors.TextMuted,
-                        uncheckedTrackColor = ArtisanColors.Graphite
-                    )
-                )
-            }
-        }
-
-        // ── 生成按钮 ──────────────────────────────────────
-        GoldButton(
-            text = "开始生成",
-            onClick = viewModel::addGenerateTask,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = uiState.userPrompt.isNotBlank()
-        )
-
-        Spacer(Modifier.height(80.dp)) // 底部padding
     }
+}
+
+// ── 上传区域（虚线边框） ─────────────────────────────────
+@Composable
+private fun UploadSection(
+    label: String,
+    counter: String,
+    imageBase64: String?,
+    placeholder: String,
+    onPick: () -> Unit,
+    onClear: () -> Unit,
+    extraAction: (@Composable () -> Unit)? = null
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 11.sp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                extraAction?.invoke()
+                Text(counter, style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 11.sp))
+            }
+        }
+
+        if (imageBase64 != null) {
+            // 已选图预览
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(68.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(ArtisanColors.Graphite)
+            ) {
+                val bitmap = remember(imageBase64) {
+                    val bytes = android.util.Base64.decode(imageBase64, android.util.Base64.NO_WRAP)
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }
+                bitmap?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+                IconButton(
+                    onClick = onClear,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(3.dp)
+                        .size(22.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(ArtisanColors.Obsidian.copy(alpha = 0.75f))
+                ) {
+                    Icon(Icons.Default.Close, null, tint = ArtisanColors.TextPrimary, modifier = Modifier.size(12.dp))
+                }
+            }
+        } else {
+            // 虚线上传框
+            val dashColor = ArtisanColors.Steel
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(62.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(ArtisanColors.Graphite.copy(alpha = 0.3f))
+                    .drawBehind {
+                        val stroke = Stroke(
+                            width = 1.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+                        )
+                        drawRoundRect(
+                            color = dashColor,
+                            style = stroke,
+                            cornerRadius = CornerRadius(6.dp.toPx())
+                        )
+                    }
+                    .clickable { onPick() },
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.AddPhotoAlternate, null, tint = ArtisanColors.TextMuted, modifier = Modifier.size(18.dp))
+                    Text(placeholder, style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 12.sp))
+                }
+            }
+        }
+    }
+}
+
+// ── 提示词输入框 ─────────────────────────────────────────
+@Composable
+private fun PromptTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    minLines: Int,
+    maxLines: Int
+) {
+    val dashColor = ArtisanColors.Steel
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(ArtisanColors.Graphite.copy(alpha = 0.4f))
+            .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(6.dp))
+    ) {
+        androidx.compose.foundation.text.BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = ArtisanType.Body.copy(color = ArtisanColors.TextPrimary, fontSize = 13.sp),
+            minLines = minLines,
+            maxLines = maxLines,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            decorationBox = { inner ->
+                if (value.isEmpty()) Text(placeholder, style = ArtisanType.Body.copy(color = ArtisanColors.TextMuted, fontSize = 13.sp))
+                inner()
+            }
+        )
+    }
+}
+
+// ── 紧凑下拉框 ───────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> CompactDropdown(
+    label: String,
+    options: List<T>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    displayText: (T) -> String,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 11.sp))
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .menuAnchor()
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(ArtisanColors.Graphite)
+                    .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(displayText(selected), style = ArtisanType.Caption.copy(color = ArtisanColors.TextPrimary, fontSize = 12.sp))
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    null,
+                    tint = ArtisanColors.TextMuted,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.background(ArtisanColors.Charcoal)
+            ) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                displayText(option),
+                                style = ArtisanType.Caption.copy(
+                                    color = if (option == selected) ArtisanColors.Champagne else ArtisanColors.TextPrimary,
+                                    fontSize = 12.sp
+                                )
+                            )
+                        },
+                        onClick = { onSelect(option); expanded = false },
+                        modifier = Modifier.background(
+                            if (option == selected) ArtisanColors.GoldMist else Color.Transparent
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── 高级选项（折叠） ─────────────────────────────────────
+@Composable
+private fun AdvancedOptions(uiState: MainUiState, viewModel: MainViewModel) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { expanded = !expanded }
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("高级选项", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
+            Icon(
+                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                null, tint = ArtisanColors.TextMuted, modifier = Modifier.size(18.dp)
+            )
+        }
+
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(ArtisanColors.Graphite.copy(alpha = 0.4f))
+                    .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(6.dp))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // 思考模式
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("思考模式", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 12.sp))
+                        Text(
+                            "minimal=快速生成，high=精准推理",
+                            style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 10.sp)
+                        )
+                    }
+                    ThinkingDropdown(
+                        selected = uiState.selectedThinkingLevel,
+                        onSelect = viewModel::selectThinkingLevel
+                    )
+                }
+
+                // 图像搜索
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("图像搜索", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 12.sp))
+                        Text("接入 Google 图片搜索，场景更准确 (Grounding)",
+                            style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 10.sp))
+                    }
+                    Switch(
+                        checked = uiState.useGrounding,
+                        onCheckedChange = { viewModel.toggleGrounding() },
+                        modifier = Modifier.size(width = 44.dp, height = 24.dp),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = ArtisanColors.Obsidian,
+                            checkedTrackColor = ArtisanColors.Champagne,
+                            uncheckedThumbColor = ArtisanColors.TextMuted,
+                            uncheckedTrackColor = ArtisanColors.Graphite
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThinkingDropdown(selected: ThinkingLevel, onSelect: (ThinkingLevel) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        Row(
+            modifier = Modifier
+                .menuAnchor()
+                .width(90.dp)
+                .height(32.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(ArtisanColors.Charcoal)
+                .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(4.dp))
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(selected.label, style = ArtisanType.Caption.copy(color = ArtisanColors.TextPrimary, fontSize = 11.sp))
+            Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                null, tint = ArtisanColors.TextMuted, modifier = Modifier.size(14.dp))
+        }
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(ArtisanColors.Charcoal)
+        ) {
+            ThinkingLevel.entries.forEach { level ->
+                DropdownMenuItem(
+                    text = { Text(level.label, style = ArtisanType.Caption.copy(color = ArtisanColors.TextPrimary, fontSize = 12.sp)) },
+                    onClick = { onSelect(level); expanded = false }
+                )
+            }
+        }
+    }
+}
+
+// ── 工具：压缩图片 ───────────────────────────────────────
+private fun compressImage(context: android.content.Context, uri: Uri): String {
+    val inputStream = context.contentResolver.openInputStream(uri) ?: return ""
+    val rawBytes = inputStream.readBytes()
+    val original = android.graphics.BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size) ?: return ""
+    val maxDim = 1280
+    val scale = if (original.width > maxDim || original.height > maxDim)
+        maxDim.toFloat() / maxOf(original.width, original.height) else 1f
+    val bitmap = if (scale < 1f) {
+        android.graphics.Bitmap.createScaledBitmap(
+            original, (original.width * scale).toInt(), (original.height * scale).toInt(), true
+        ).also { original.recycle() }
+    } else original
+    val out = java.io.ByteArrayOutputStream()
+    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
+    bitmap.recycle()
+    return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
 }
 
 private val Int.sp get() = androidx.compose.ui.unit.TextUnit(this.toFloat(), androidx.compose.ui.unit.TextUnitType.Sp)

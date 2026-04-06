@@ -94,14 +94,6 @@ private fun TabletLayout(
         it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
     }
 
-    // 加入队列后自动跳转到任务Tab
-    LaunchedEffect(uiState.pendingTaskNavigation) {
-        if (uiState.pendingTaskNavigation) {
-            rightTab = 1
-            viewModel.dismissTaskNavigation()
-        }
-    }
-
     Row(modifier = Modifier.fillMaxSize()) {
         // 左栏 40%：控制面板
         Column(
@@ -357,14 +349,6 @@ private fun PhoneLayout(
 ) {
     // 0=生成 1=任务 2=编辑 3=图库
     var selectedTab by remember { mutableIntStateOf(0) }
-
-    // 加入队列后自动跳转到任务Tab
-    LaunchedEffect(uiState.pendingTaskNavigation) {
-        if (uiState.pendingTaskNavigation) {
-            selectedTab = 1
-            viewModel.dismissTaskNavigation()
-        }
-    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(

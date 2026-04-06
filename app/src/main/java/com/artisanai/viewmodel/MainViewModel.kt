@@ -1,6 +1,7 @@
 package com.artisanai.viewmodel
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.lifecycle.ViewModel
@@ -10,6 +11,7 @@ import com.artisanai.data.model.*
 import com.artisanai.repository.AgentRepository
 import com.artisanai.repository.GalleryRepository
 import com.artisanai.repository.ImageGenRepository
+import com.artisanai.service.GenerationForegroundService
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.ByteArrayOutputStream
@@ -49,9 +51,6 @@ data class MainUiState(
     val selectedGalleryImage: com.artisanai.data.model.GalleryImage? = null,
     val toastMessage: String? = null,
 
-    // 导航信号：加入队列后通知UI切换到任务Tab
-    val pendingTaskNavigation: Boolean = false,
-
     // 导航
     val currentTab: AppTab = AppTab.GENERATE,
 
@@ -62,6 +61,7 @@ data class MainUiState(
 enum class AppTab { GENERATE, GALLERY }
 
 class MainViewModel(
+    private val appContext: Context,
     private val imageGenRepo: ImageGenRepository,
     private val agentRepo: AgentRepository,
     private val galleryRepo: GalleryRepository
@@ -86,7 +86,6 @@ class MainViewModel(
     fun updateUserPrompt(text: String) = _uiState.update { it.copy(userPrompt = text) }
     fun clearPolishedPrompt() = _uiState.update { it.copy(polishedPrompt = "") }
     fun clearReversedPrompt() = _uiState.update { it.copy(reversedPrompt = "") }
-    fun dismissTaskNavigation() = _uiState.update { it.copy(pendingTaskNavigation = false) }
     fun selectAspectRatio(ratio: AspectRatio) = _uiState.update { it.copy(selectedAspectRatio = ratio) }
     fun selectImageSize(size: ImageSize) = _uiState.update { it.copy(selectedImageSize = size) }
     fun selectThinkingLevel(level: ThinkingLevel) = _uiState.update { it.copy(selectedThinkingLevel = level) }
@@ -238,8 +237,10 @@ class MainViewModel(
             launchTaskExecution(task)
         }
         if (state.selectedCount > 1) showToast("已加入 ${state.selectedCount} 个任务")
-        // 通知 UI 切换到任务Tab
-        _uiState.update { it.copy(pendingTaskNavigation = true) }
+        // 启动前台保活服务，防止后台 socket 被系统关闭
+        appContext.startForegroundService(
+            Intent(appContext, GenerationForegroundService::class.java)
+        )
     }
 
     private fun buildFinalPrompt(userPrompt: String, referencePrompt: String): String {
@@ -297,6 +298,13 @@ class MainViewModel(
                 }
             } finally {
                 semaphore.release()
+                // 全部活跃任务结束后停止保活服务
+                val remaining = _uiState.value.tasks.count {
+                    it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
+                }
+                if (remaining == 0) {
+                    appContext.stopService(Intent(appContext, GenerationForegroundService::class.java))
+                }
             }
         }
     }
@@ -505,6 +513,7 @@ class MainViewModel(
 
             @Suppress("UNCHECKED_CAST")
             return MainViewModel(
+                appContext = appContext,
                 imageGenRepo = ImageGenRepository(appContext),
                 agentRepo = AgentRepository(appContext),
                 galleryRepo = GalleryRepository(appContext, db.galleryDao())

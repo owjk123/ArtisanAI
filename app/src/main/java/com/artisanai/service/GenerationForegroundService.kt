@@ -34,7 +34,7 @@ class GenerationForegroundService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("ArtisanAI")
-            .setContentText("正在生成图片，切换后台不影响进度...")
+            .setContentText("正在处理请求，切换后台不影响进度...")
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()

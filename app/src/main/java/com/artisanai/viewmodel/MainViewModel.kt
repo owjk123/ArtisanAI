@@ -220,7 +220,6 @@ class MainViewModel(
     }
 
     private fun doEnqueueTasks(state: MainUiState, finalPrompt: String, refPrompt: String) {
-        val refImage = state.referenceImages.firstOrNull()
         repeat(state.selectedCount) {
             val task = GenerateTask(
                 id = UUID.randomUUID().toString(),
@@ -230,7 +229,7 @@ class MainViewModel(
                 imageSize = state.selectedImageSize,
                 thinkingLevel = state.selectedThinkingLevel,
                 useGrounding = state.useGrounding,
-                referenceImageBase64 = refImage,
+                referenceImages = state.referenceImages,   // 全部参考图
                 status = TaskStatus.QUEUED
             )
             _uiState.update { it.copy(tasks = it.tasks + task) }
@@ -259,23 +258,14 @@ class MainViewModel(
                 // 更新状态为处理中
                 updateTaskStatus(task.id, TaskStatus.PROCESSING, progress = 0.1f)
 
-                val result = if (task.referenceImageBase64 != null) {
-                    imageGenRepo.editImage(
-                        prompt = task.prompt,
-                        imageBase64 = task.referenceImageBase64,
-                        aspectRatio = task.aspectRatio,
-                        imageSize = task.imageSize,
-                        thinkingLevel = task.thinkingLevel
-                    )
-                } else {
-                    imageGenRepo.generateImage(
-                        prompt = task.prompt,
-                        aspectRatio = task.aspectRatio,
-                        imageSize = task.imageSize,
-                        thinkingLevel = task.thinkingLevel,
-                        useGrounding = task.useGrounding
-                    )
-                }
+                val result = imageGenRepo.generateImage(
+                    prompt = task.prompt,
+                    referenceImages = task.referenceImages,
+                    aspectRatio = task.aspectRatio,
+                    imageSize = task.imageSize,
+                    thinkingLevel = task.thinkingLevel,
+                    useGrounding = task.useGrounding
+                )
 
                 updateTaskStatus(task.id, TaskStatus.PROCESSING, progress = 0.8f)
 
@@ -397,6 +387,11 @@ class MainViewModel(
         val turnId = newTurn.id
         val sourceImage = session.sourceImageBase64
 
+        // 启动前台保活服务，防止后台 socket 被关闭
+        appContext.startForegroundService(
+            Intent(appContext, GenerationForegroundService::class.java)
+        )
+
         viewModelScope.launch {
             try {
                 val completedTurns = _uiState.value.editSession.turns.dropLast(1)
@@ -454,6 +449,14 @@ class MainViewModel(
                     ))
                 }
                 showToast("编辑出错: ${e.message}")
+            } finally {
+                // 没有活跃任务时停止保活服务
+                val hasActiveTasks = _uiState.value.tasks.any {
+                    it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
+                }
+                if (!hasActiveTasks && !_uiState.value.editSession.isGenerating) {
+                    appContext.stopService(Intent(appContext, GenerationForegroundService::class.java))
+                }
             }
         }
     }

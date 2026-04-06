@@ -23,6 +23,7 @@ class ImageGenRepository(private val context: Context) {
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(300, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        .connectionPool(okhttp3.ConnectionPool(3, 90, TimeUnit.SECONDS)) // 90s idle，减少stale连接
         .build()
 
     private val gson = Gson()
@@ -32,6 +33,7 @@ class ImageGenRepository(private val context: Context) {
 
     suspend fun generateImage(
         prompt: String,
+        referenceImages: List<String> = emptyList(),   // 风格参考图（多张）
         aspectRatio: AspectRatio = AspectRatio.PORTRAIT_9_16,
         imageSize: ImageSize = ImageSize.SIZE_2K,
         thinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL,
@@ -39,110 +41,31 @@ class ImageGenRepository(private val context: Context) {
     ): Result<String> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Result.failure(Exception("请先在设置中填写 API Key"))
         try {
-            executeRequest(buildBody(prompt, aspectRatio, imageSize, thinkingLevel, useGrounding, null))
+            executeRequest(buildBody(prompt, aspectRatio, imageSize, thinkingLevel, useGrounding, referenceImages))
         } catch (e: Exception) {
             Log.e("ImageGenRepo", "generateImage failed", e)
             Result.failure(e)
         }
     }
 
-    suspend fun editImage(
-        prompt: String,
-        imageBase64: String,
-        aspectRatio: AspectRatio = AspectRatio.PORTRAIT_9_16,
-        imageSize: ImageSize = ImageSize.SIZE_2K,
-        thinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL,
-    ): Result<String> = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) return@withContext Result.failure(Exception("请先在设置中填写 API Key"))
-        try {
-            executeRequest(buildBody(prompt, aspectRatio, imageSize, thinkingLevel, false, imageBase64))
-        } catch (e: Exception) {
-            Log.e("ImageGenRepo", "editImage failed", e)
-            Result.failure(e)
-        }
-    }
-
-    /** 多轮图片编辑：传入历史轮次 + 新指令 */
+    /**
+     * 图片链式编辑：每次用上一轮结果图（或源图）+ 新指令。
+     * 不传递全部历史大图，避免请求体过大导致超时/卡住。
+     */
     suspend fun multiTurnEditImage(
-        completedTurns: List<EditTurn>,  // 已完成的轮次（含结果图）
+        completedTurns: List<EditTurn>,
         newInstruction: String,
-        sourceImageBase64: String?,      // 第一轮需要源图
+        sourceImageBase64: String?,
         aspectRatio: AspectRatio = AspectRatio.SQUARE_1_1,
         imageSize: ImageSize = ImageSize.SIZE_2K,
         thinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL
     ): Result<String> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Result.failure(Exception("请先在设置中填写 API Key"))
         try {
-            val contents = com.google.gson.JsonArray()
-
-            // 历史轮次
-            completedTurns.forEach { turn ->
-                // user turn
-                contents.add(JsonObject().apply {
-                    addProperty("role", "user")
-                    add("parts", com.google.gson.JsonArray().apply {
-                        turn.inputImageBase64?.let { img ->
-                            add(JsonObject().apply {
-                                add("inlineData", JsonObject().apply {
-                                    addProperty("mimeType", "image/jpeg")
-                                    addProperty("data", img)
-                                })
-                            })
-                        }
-                        add(JsonObject().apply { addProperty("text", turn.userText) })
-                    })
-                })
-                // model turn
-                turn.resultImageBase64?.let { result ->
-                    contents.add(JsonObject().apply {
-                        addProperty("role", "model")
-                        add("parts", com.google.gson.JsonArray().apply {
-                            add(JsonObject().apply {
-                                add("inlineData", JsonObject().apply {
-                                    addProperty("mimeType", "image/jpeg")
-                                    addProperty("data", result)
-                                })
-                            })
-                        })
-                    })
-                }
-            }
-
-            // 新的 user turn
-            contents.add(JsonObject().apply {
-                addProperty("role", "user")
-                add("parts", com.google.gson.JsonArray().apply {
-                    // 若没有历史且有源图，附在新指令上
-                    if (completedTurns.isEmpty()) {
-                        sourceImageBase64?.let { img ->
-                            add(JsonObject().apply {
-                                add("inlineData", JsonObject().apply {
-                                    addProperty("mimeType", "image/jpeg")
-                                    addProperty("data", img)
-                                })
-                            })
-                        }
-                    }
-                    add(JsonObject().apply { addProperty("text", newInstruction) })
-                })
-            })
-
-            val body = JsonObject().apply {
-                add("contents", contents)
-                add("generationConfig", JsonObject().apply {
-                    add("responseModalities", com.google.gson.JsonArray().apply { add("IMAGE") })
-                    add("imageConfig", JsonObject().apply {
-                        addProperty("aspectRatio", aspectRatio.value)
-                        addProperty("imageSize", imageSize.value)
-                    })
-                    if (thinkingLevel != ThinkingLevel.NONE) {
-                        add("thinkingConfig", JsonObject().apply {
-                            addProperty("thinkingLevel", thinkingLevel.value)
-                        })
-                    }
-                })
-            }
-            executeRequest(gson.toJson(body))
+            // 用最近一轮结果图作为基础；没有历史则用用户上传的源图
+            val baseImage = completedTurns.lastOrNull { it.resultImageBase64 != null }
+                ?.resultImageBase64 ?: sourceImageBase64
+            executeRequest(buildBody(newInstruction, aspectRatio, imageSize, thinkingLevel, false, listOfNotNull(baseImage)))
         } catch (e: Exception) {
             Log.e("ImageGenRepo", "multiTurnEditImage failed", e)
             Result.failure(e)
@@ -151,16 +74,18 @@ class ImageGenRepository(private val context: Context) {
 
     private fun buildBody(
         prompt: String, aspectRatio: AspectRatio, imageSize: ImageSize,
-        thinkingLevel: ThinkingLevel, useGrounding: Boolean, imageBase64: String?
+        thinkingLevel: ThinkingLevel, useGrounding: Boolean,
+        referenceImages: List<String> = emptyList()
     ): String {
         val body = JsonObject()
         val parts = com.google.gson.JsonArray().apply {
             add(JsonObject().apply { addProperty("text", prompt) })
-            if (imageBase64 != null) {
+            // 全部参考图（风格参考或编辑基础图）依次附入
+            referenceImages.forEach { img ->
                 add(JsonObject().apply {
                     add("inlineData", JsonObject().apply {
                         addProperty("mimeType", "image/jpeg")
-                        addProperty("data", imageBase64)
+                        addProperty("data", img)
                     })
                 })
             }
@@ -208,13 +133,20 @@ class ImageGenRepository(private val context: Context) {
             }
             return Result.failure(Exception(errMsg))
         }
+        // 校验是否为合法 JSON（防止后台恢复后 stale 连接返回 HTML/网关错误）
+        if (!responseBody.trimStart().startsWith("{")) {
+            Log.e("ImageGenRepo", "Non-JSON response (first 300 chars): ${responseBody.take(300)}")
+            return Result.failure(Exception("服务器返回异常响应，请重试"))
+        }
         return try {
             val json = gson.fromJson(responseBody, JsonObject::class.java)
             val candidates = json.getAsJsonArray("candidates")
                 ?: return Result.failure(Exception("API 返回空结果"))
             if (candidates.size() == 0) return Result.failure(Exception("可能触发了安全过滤，请修改提示词"))
-            val parts = candidates[0].asJsonObject
-                .getAsJsonObject("content").getAsJsonArray("parts")
+            val content = candidates[0].asJsonObject.getAsJsonObject("content")
+                ?: return Result.failure(Exception("API 返回结构异常（无 content）"))
+            val parts = content.getAsJsonArray("parts")
+                ?: return Result.failure(Exception("API 返回结构异常（无 parts）"))
             for (part in parts) {
                 val p = part.asJsonObject
                 if (p.has("inlineData")) {
@@ -223,6 +155,7 @@ class ImageGenRepository(private val context: Context) {
             }
             Result.failure(Exception("响应中未找到图像数据"))
         } catch (e: Exception) {
+            Log.e("ImageGenRepo", "Parse error, body (first 300): ${responseBody.take(300)}", e)
             Result.failure(Exception("解析响应失败: ${e.message}"))
         }
     }

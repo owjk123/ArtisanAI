@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -60,7 +61,7 @@ fun ImageEditPanel(
         }
     }
 
-    Column(modifier = modifier.background(ArtisanColors.Obsidian)) {
+    Column(modifier = modifier.background(ArtisanColors.Obsidian).imePadding()) {
 
         // ── 顶栏 ───────────────────────────────────────────
         Row(

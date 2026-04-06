@@ -53,7 +53,7 @@ data class GenerateTask(
     val imageSize: ImageSize = ImageSize.SIZE_2K,
     val thinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL,
     val useGrounding: Boolean = false,
-    val referenceImageBase64: String? = null,  // 用于图生图
+    val referenceImages: List<String> = emptyList(),  // 风格参考图（多张）
     val status: TaskStatus = TaskStatus.QUEUED,
     val progress: Float = 0f,
     val resultImageBase64: String? = null,

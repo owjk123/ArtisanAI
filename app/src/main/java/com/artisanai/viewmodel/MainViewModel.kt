@@ -19,7 +19,8 @@ import java.util.UUID
 data class MainUiState(
     // 输入区
     val userPrompt: String = "",
-    val referencePrompt: String = "",          // 反推/润色后的独立提示词
+    val polishedPrompt: String = "",           // 直接生图：AI润色结果（独立于反推）
+    val reversedPrompt: String = "",           // 反推生图：图像分析结果（独立于润色）
     val selectedAspectRatio: AspectRatio = AspectRatio.PORTRAIT_9_16,
     val selectedImageSize: ImageSize = ImageSize.SIZE_2K,
     val selectedThinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL,
@@ -47,6 +48,9 @@ data class MainUiState(
     // 弹窗
     val selectedGalleryImage: com.artisanai.data.model.GalleryImage? = null,
     val toastMessage: String? = null,
+
+    // 导航信号：加入队列后通知UI切换到任务Tab
+    val pendingTaskNavigation: Boolean = false,
 
     // 导航
     val currentTab: AppTab = AppTab.GENERATE,
@@ -80,7 +84,9 @@ class MainViewModel(
 
     // ── 输入更新 ───────────────────────────────────────────
     fun updateUserPrompt(text: String) = _uiState.update { it.copy(userPrompt = text) }
-    fun updateReferencePrompt(text: String) = _uiState.update { it.copy(referencePrompt = text) }
+    fun clearPolishedPrompt() = _uiState.update { it.copy(polishedPrompt = "") }
+    fun clearReversedPrompt() = _uiState.update { it.copy(reversedPrompt = "") }
+    fun dismissTaskNavigation() = _uiState.update { it.copy(pendingTaskNavigation = false) }
     fun selectAspectRatio(ratio: AspectRatio) = _uiState.update { it.copy(selectedAspectRatio = ratio) }
     fun selectImageSize(size: ImageSize) = _uiState.update { it.copy(selectedImageSize = size) }
     fun selectThinkingLevel(level: ThinkingLevel) = _uiState.update { it.copy(selectedThinkingLevel = level) }
@@ -126,7 +132,7 @@ class MainViewModel(
         _uiState.update { it.copy(selectedGalleryImage = image) }
     }
 
-    // ── Agent：润色提示词 ──────────────────────────────────
+    // ── Agent：润色提示词（直接生图模式专用）─────────────────
     fun polishPrompt() {
         val userPrompt = _uiState.value.userPrompt
         if (userPrompt.isBlank()) {
@@ -137,10 +143,7 @@ class MainViewModel(
             _uiState.update { it.copy(isPolishing = true) }
             val result = agentRepo.polishPrompt(userPrompt)
             result.onSuccess { polished ->
-                _uiState.update { it.copy(
-                    referencePrompt = polished,
-                    isPolishing = false
-                )}
+                _uiState.update { it.copy(polishedPrompt = polished, isPolishing = false) }
             }.onFailure { e ->
                 _uiState.update { it.copy(isPolishing = false) }
                 showToast("润色失败: ${e.message}")
@@ -148,7 +151,7 @@ class MainViewModel(
         }
     }
 
-    // ── Agent：反推参考图提示词（手动触发，返回 Result 供内部复用）─
+    // ── Agent：反推参考图提示词（反推生图模式专用）──────────
     fun reversePromptFromImage() {
         val imageBase64 = _uiState.value.reverseImageBase64
         if (imageBase64 == null) {
@@ -159,7 +162,7 @@ class MainViewModel(
             _uiState.update { it.copy(isReversingPrompt = true) }
             val result = agentRepo.reversePromptFromImage(imageBase64)
             result.onSuccess { reversed ->
-                _uiState.update { it.copy(referencePrompt = reversed, isReversingPrompt = false) }
+                _uiState.update { it.copy(reversedPrompt = reversed, isReversingPrompt = false) }
             }.onFailure { e ->
                 _uiState.update { it.copy(isReversingPrompt = false) }
                 showToast("反推失败: ${e.message}")
@@ -167,12 +170,12 @@ class MainViewModel(
         }
     }
 
-    /** 内部使用：等待反推完成并返回提示词 */
+    /** 内部使用：加入队列时自动执行反推，结果写入 reversedPrompt */
     private suspend fun runReversePrompt(imageBase64: String): Result<String> {
         _uiState.update { it.copy(isReversingPrompt = true) }
         val result = agentRepo.reversePromptFromImage(imageBase64)
         result.onSuccess { reversed ->
-            _uiState.update { it.copy(referencePrompt = reversed, isReversingPrompt = false) }
+            _uiState.update { it.copy(reversedPrompt = reversed, isReversingPrompt = false) }
         }.onFailure {
             _uiState.update { it.copy(isReversingPrompt = false) }
         }
@@ -189,11 +192,8 @@ class MainViewModel(
             return
         }
 
-        // 反推模式且有反推图时，先自动执行反推再加队列
+        // ── 反推模式：先执行图像分析，再加队列 ─────────────
         if (state.isReverseMode && state.reverseImageBase64 != null) {
-            if (userPrompt.isBlank() && state.referencePrompt.isBlank()) {
-                // prompt 为空也允许：反推结果会作为 prompt
-            }
             viewModelScope.launch {
                 val reverseResult = runReversePrompt(state.reverseImageBase64)
                 reverseResult.onSuccess { reversed ->
@@ -211,13 +211,13 @@ class MainViewModel(
             return
         }
 
-        // 直接生图模式
+        // ── 直接生图模式：使用 userPrompt + polishedPrompt ──
         if (userPrompt.isBlank()) {
             showToast("请输入提示词")
             return
         }
-        val finalPrompt = buildFinalPrompt(userPrompt, state.referencePrompt)
-        doEnqueueTasks(state, finalPrompt, state.referencePrompt)
+        val finalPrompt = buildFinalPrompt(userPrompt, state.polishedPrompt)
+        doEnqueueTasks(state, finalPrompt, state.polishedPrompt)
     }
 
     private fun doEnqueueTasks(state: MainUiState, finalPrompt: String, refPrompt: String) {
@@ -238,6 +238,8 @@ class MainViewModel(
             launchTaskExecution(task)
         }
         if (state.selectedCount > 1) showToast("已加入 ${state.selectedCount} 个任务")
+        // 通知 UI 切换到任务Tab
+        _uiState.update { it.copy(pendingTaskNavigation = true) }
     }
 
     private fun buildFinalPrompt(userPrompt: String, referencePrompt: String): String {

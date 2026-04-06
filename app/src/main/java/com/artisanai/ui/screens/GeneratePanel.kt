@@ -390,17 +390,20 @@ private fun PromptSection(uiState: MainUiState, viewModel: MainViewModel) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("提示词", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary))
-            TextButton(
-                onClick = viewModel::polishPrompt,
-                enabled = !uiState.isPolishing && uiState.userPrompt.isNotBlank(),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-            ) {
-                if (uiState.isPolishing) {
-                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp, color = ArtisanColors.Champagne)
-                } else {
-                    Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(12.dp), tint = ArtisanColors.Champagne)
-                    Spacer(Modifier.width(3.dp))
-                    Text("AI 优化", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
+            // 直接生图模式才显示 AI 优化按钮
+            if (!uiState.isReverseMode) {
+                TextButton(
+                    onClick = viewModel::polishPrompt,
+                    enabled = !uiState.isPolishing && uiState.userPrompt.isNotBlank(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    if (uiState.isPolishing) {
+                        CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp, color = ArtisanColors.Champagne)
+                    } else {
+                        Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(12.dp), tint = ArtisanColors.Champagne)
+                        Spacer(Modifier.width(3.dp))
+                        Text("AI 优化", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
+                    }
                 }
             }
         }
@@ -413,7 +416,7 @@ private fun PromptSection(uiState: MainUiState, viewModel: MainViewModel) {
         ) {
             val minLines = if (uiState.isReverseMode) 2 else 3
             val maxLines = if (uiState.isReverseMode) 3 else 5
-            val placeholder = if (uiState.isReverseMode) "可选：补充描述（反推结果会自动填入）" else "描述你想生成的图片..."
+            val placeholder = if (uiState.isReverseMode) "可选：补充描述（反推结果会自动拼入）" else "描述你想生成的图片..."
             androidx.compose.foundation.text.BasicTextField(
                 value = uiState.userPrompt,
                 onValueChange = viewModel::updateUserPrompt,
@@ -427,6 +430,63 @@ private fun PromptSection(uiState: MainUiState, viewModel: MainViewModel) {
                 }
             )
         }
+
+        // 直接生图：AI优化结果预览卡
+        if (!uiState.isReverseMode && uiState.polishedPrompt.isNotBlank()) {
+            PromptResultCard(
+                label = "AI 优化结果",
+                text = uiState.polishedPrompt,
+                onClear = viewModel::clearPolishedPrompt
+            )
+        }
+
+        // 反推生图：已分析的提示词预览卡（手动预分析结果）
+        if (uiState.isReverseMode && uiState.reversedPrompt.isNotBlank()) {
+            PromptResultCard(
+                label = "反推结果（将自动拼入队列）",
+                text = uiState.reversedPrompt,
+                onClear = viewModel::clearReversedPrompt
+            )
+        }
+    }
+}
+
+@Composable
+private fun PromptResultCard(label: String, text: String, onClear: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(ArtisanColors.Charcoal)
+            .border(1.dp, ArtisanColors.Champagne.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(Icons.Default.AutoFixHigh, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(11.dp))
+                Text(label, style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 10.sp))
+            }
+            IconButton(
+                onClick = onClear,
+                modifier = Modifier.size(18.dp)
+            ) {
+                Icon(Icons.Default.Close, null, tint = ArtisanColors.TextMuted, modifier = Modifier.size(12.dp))
+            }
+        }
+        Text(
+            text,
+            style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 11.sp),
+            maxLines = 3,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
     }
 }
 

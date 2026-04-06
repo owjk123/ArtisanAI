@@ -350,7 +350,8 @@ private fun PhoneLayout(
         Box(modifier = Modifier.weight(1f)) {
             when (selectedTab) {
                 0 -> PhoneGenerateWithButton(uiState, viewModel)
-                1 -> GalleryPanel(uiState, viewModel, columns = 2, modifier = Modifier.fillMaxSize())
+                1 -> ImageEditPanel(uiState, viewModel, modifier = Modifier.fillMaxSize())
+                2 -> GalleryPanel(uiState, viewModel, columns = 2, modifier = Modifier.fillMaxSize())
             }
         }
 
@@ -365,7 +366,8 @@ private fun PhoneLayout(
             verticalAlignment = Alignment.CenterVertically
         ) {
             BottomNavItem(Icons.Default.AutoAwesome, "生成", selectedTab == 0) { selectedTab = 0 }
-            BottomNavItem(Icons.Default.PhotoLibrary, "图库", selectedTab == 1) { selectedTab = 1 }
+            BottomNavItem(Icons.Default.Edit, "编辑", selectedTab == 1) { selectedTab = 1 }
+            BottomNavItem(Icons.Default.PhotoLibrary, "图库", selectedTab == 2) { selectedTab = 2 }
         }
     }
 }

@@ -384,47 +384,66 @@ class MainViewModel(
             )
         )}
 
-        viewModelScope.launch {
-            val completedTurns = _uiState.value.editSession.turns.dropLast(1)
-                .filter { it.resultImageBase64 != null }
-            val state = _uiState.value
+        val turnId = newTurn.id
+        val sourceImage = session.sourceImageBase64
 
-            val result = imageGenRepo.multiTurnEditImage(
-                completedTurns = completedTurns,
-                newInstruction = instruction,
-                sourceImageBase64 = session.sourceImageBase64,
-                aspectRatio = state.selectedAspectRatio,
-                imageSize = state.selectedImageSize,
-                thinkingLevel = state.selectedThinkingLevel
-            )
-            val turnId = newTurn.id
-            result.onSuccess { base64 ->
-                _uiState.update { st ->
-                    st.copy(editSession = st.editSession.copy(
-                        turns = st.editSession.turns.map { t ->
-                            if (t.id == turnId) t.copy(resultImageBase64 = base64, isGenerating = false) else t
-                        },
-                        isGenerating = false
-                    ))
-                }
-                // 保存到图库
-                galleryRepo.saveGeneratedImage(
-                    id = turnId,
-                    base64Data = base64,
-                    prompt = instruction,
-                    aspectRatio = state.selectedAspectRatio.value,
-                    imageSize = state.selectedImageSize.value
+        viewModelScope.launch {
+            try {
+                val completedTurns = _uiState.value.editSession.turns.dropLast(1)
+                    .filter { it.resultImageBase64 != null }
+                val state = _uiState.value
+
+                val result = imageGenRepo.multiTurnEditImage(
+                    completedTurns = completedTurns,
+                    newInstruction = instruction,
+                    sourceImageBase64 = sourceImage,
+                    aspectRatio = state.selectedAspectRatio,
+                    imageSize = state.selectedImageSize,
+                    thinkingLevel = state.selectedThinkingLevel
                 )
-            }.onFailure { e ->
+
+                val base64 = result.getOrNull()
+                if (base64 != null) {
+                    _uiState.update { st ->
+                        st.copy(editSession = st.editSession.copy(
+                            turns = st.editSession.turns.map { t ->
+                                if (t.id == turnId) t.copy(resultImageBase64 = base64, isGenerating = false) else t
+                            },
+                            isGenerating = false
+                        ))
+                    }
+                    // 保存到图库（独立协程，不影响编辑流程）
+                    runCatching {
+                        galleryRepo.saveGeneratedImage(
+                            id = turnId,
+                            base64Data = base64,
+                            prompt = instruction,
+                            aspectRatio = state.selectedAspectRatio.value,
+                            imageSize = state.selectedImageSize.value
+                        )
+                    }
+                } else {
+                    val errMsg = result.exceptionOrNull()?.message ?: "未知错误"
+                    _uiState.update { st ->
+                        st.copy(editSession = st.editSession.copy(
+                            turns = st.editSession.turns.map { t ->
+                                if (t.id == turnId) t.copy(error = errMsg, isGenerating = false) else t
+                            },
+                            isGenerating = false
+                        ))
+                    }
+                    showToast("编辑失败: $errMsg")
+                }
+            } catch (e: Exception) {
                 _uiState.update { st ->
                     st.copy(editSession = st.editSession.copy(
                         turns = st.editSession.turns.map { t ->
-                            if (t.id == turnId) t.copy(error = e.message, isGenerating = false) else t
+                            if (t.id == turnId) t.copy(error = e.message ?: "出错", isGenerating = false) else t
                         },
                         isGenerating = false
                     ))
                 }
-                showToast("编辑失败: ${e.message}")
+                showToast("编辑出错: ${e.message}")
             }
         }
     }

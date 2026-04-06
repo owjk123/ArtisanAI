@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.artisanai.data.model.EditSession
@@ -40,8 +41,12 @@ fun ImageEditPanel(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val session = uiState.editSession
     val listState = rememberLazyListState()
+
+    // 初次加载时清除焦点，防止键盘自动弹出
+    LaunchedEffect(Unit) { focusManager.clearFocus() }
 
     // 自动滚动到最新
     LaunchedEffect(session.turns.size) {

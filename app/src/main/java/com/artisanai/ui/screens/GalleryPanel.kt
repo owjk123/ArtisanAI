@@ -13,6 +13,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -154,6 +157,9 @@ private fun ImageDetailDialog(
         SimpleDateFormat("yyyy·MM·dd  HH:mm", Locale.getDefault()).format(Date(image.createdAt))
     }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var promptExpanded by remember { mutableStateOf(false) }
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -235,15 +241,40 @@ private fun ImageDetailDialog(
 
             // 提示词信息
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("PROMPT", style = ArtisanType.Label)
-                Spacer(Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("PROMPT", style = ArtisanType.Label)
+                    IconButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(image.prompt))
+                            android.widget.Toast.makeText(context, "已复制提示词", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, null, tint = ArtisanColors.TextMuted, modifier = Modifier.size(14.dp))
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
                 Text(
                     image.prompt,
                     style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary),
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis
+                    maxLines = if (promptExpanded) Int.MAX_VALUE else 4,
+                    overflow = if (promptExpanded) TextOverflow.Clip else TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = { promptExpanded = !promptExpanded },
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.height(24.dp)
+                ) {
+                    Text(
+                        if (promptExpanded) "收起" else "展开全部",
+                        style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp)
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     InfoChip("比例", image.aspectRatio)
                     InfoChip("分辨率", image.imageSize)

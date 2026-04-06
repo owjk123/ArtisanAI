@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.artisanai.data.model.*
@@ -43,6 +44,10 @@ fun GeneratePanel(
     isTablet: Boolean = true
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+
+    // 初次加载时清除焦点，防止键盘自动弹出
+    LaunchedEffect(Unit) { focusManager.clearFocus() }
 
     // 同步 UI 模式状态到 ViewModel
     val mode = if (uiState.isReverseMode) GenerateMode.REVERSE else GenerateMode.DIRECT

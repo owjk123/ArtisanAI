@@ -23,7 +23,12 @@ class AgentRepository(private val context: Context) {
 
     private val gson = Gson()
     private val apiKey get() = ApiKeyManager.loadAgentApiKey(context)
-    private val chatUrl get() = "${ApiKeyManager.loadAgentBaseUrl(context)}/v1/chat/completions"
+
+    private fun candidateBaseUrls(): List<String> {
+        val primary = ApiKeyManager.loadAgentBaseUrl(context).trimEnd('/')
+        val presetUrls = ApiKeyManager.PRESETS.map { it.url.trimEnd('/') }
+        return if (primary in presetUrls) listOf(primary) + presetUrls.filter { it != primary } else listOf(primary)
+    }
     private val model = "gemini-3.1-flash-lite-preview"
 
     private val customSystemPrompt get() = ApiKeyManager.loadAgentSystemPrompt(context)
@@ -101,15 +106,31 @@ Rules:
     }
 
     private fun postJson(json: String): String? {
-        val response = client.newCall(
-            Request.Builder()
-                .url(chatUrl)
-                .header("Authorization", "Bearer $apiKey")
-                .header("Content-Type", "application/json")
-                .post(json.toRequestBody("application/json".toMediaType()))
-                .build()
-        ).execute()
-        return if (response.isSuccessful) response.body?.string() else null
+        var last: String? = null
+        for ((idx, base) in candidateBaseUrls().withIndex()) {
+            try {
+                val response = client.newCall(
+                    Request.Builder()
+                        .url("$base/v1/chat/completions")
+                        .header("Authorization", "Bearer $apiKey")
+                        .header("Content-Type", "application/json")
+                        .post(json.toRequestBody("application/json".toMediaType()))
+                        .build()
+                ).execute()
+                if (response.isSuccessful) {
+                    if (idx > 0) Log.i("AgentRepo", "Fallback succeeded on $base")
+                    return response.body?.string()
+                }
+                // 业务错误（401/403/400）不 fallback
+                if (response.code in listOf(400, 401, 403)) return null
+                last = "HTTP ${response.code} on $base"
+            } catch (e: java.io.IOException) {
+                Log.w("AgentRepo", "Endpoint $base unreachable, try next. ${e.message}")
+                last = e.message
+            }
+        }
+        Log.e("AgentRepo", "All endpoints failed. Last: $last")
+        return null
     }
 
     private fun parseChat(body: String?): Result<String> {

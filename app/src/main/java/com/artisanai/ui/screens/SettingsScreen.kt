@@ -18,9 +18,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.artisanai.util.ApiKeyManager
+import com.artisanai.util.EndpointHealth
 import com.artisanai.ui.components.*
 import com.artisanai.ui.theme.ArtisanColors
 import com.artisanai.ui.theme.ArtisanType
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
@@ -144,7 +146,14 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
-            // ── Base URL 卡片 ────────────────────────────
+            // ── API 线路 卡片 ────────────────────────────
+            val scope = rememberCoroutineScope()
+            var customMode by remember {
+                mutableStateOf(baseUrl.trimEnd('/') !in ApiKeyManager.PRESETS.map { it.url.trimEnd('/') })
+            }
+            var checking by remember { mutableStateOf(false) }
+            var healthResults by remember { mutableStateOf<List<EndpointHealth.Result>>(emptyList()) }
+
             ArtisanCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
@@ -157,37 +166,153 @@ fun SettingsScreen(onBack: () -> Unit) {
                         Icon(Icons.Default.Link, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(18.dp))
                     }
                     Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text("API 地址", style = ArtisanType.TitleGold.copy(fontSize = 15.sp))
-                        Text("默认使用 api.apiyi.com", style = ArtisanType.Caption)
+                    Column(Modifier.weight(1f)) {
+                        Text("API 线路", style = ArtisanType.TitleGold.copy(fontSize = 15.sp))
+                        Text("选择最快线路，失败会自动切换其他线路", style = ArtisanType.Caption)
+                    }
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                checking = true
+                                healthResults = EndpointHealth.checkAll()
+                                checking = false
+                            }
+                        },
+                        enabled = !checking
+                    ) {
+                        Text(
+                            if (checking) "测试中..." else "测速",
+                            style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne)
+                        )
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
 
-                OutlinedTextField(
-                    value = baseUrl,
-                    onValueChange = { baseUrl = it; saved = false },
-                    placeholder = { Text("https://api.apiyi.com", style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = ArtisanType.Body,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = ArtisanColors.Champagne,
-                        unfocusedBorderColor = ArtisanColors.Steel,
-                        focusedTextColor = ArtisanColors.TextPrimary,
-                        unfocusedTextColor = ArtisanColors.TextPrimary,
-                        cursorColor = ArtisanColors.Champagne,
-                        focusedContainerColor = ArtisanColors.Graphite,
-                        unfocusedContainerColor = ArtisanColors.Graphite,
-                    ),
-                    shape = RoundedCornerShape(6.dp)
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "兼容任意 OpenAI 格式接口，可替换为自定义中转地址",
-                    style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 11.sp)
-                )
+                // 4 条预设线路
+                ApiKeyManager.PRESETS.forEach { preset ->
+                    val selected = !customMode && baseUrl.trimEnd('/') == preset.url.trimEnd('/')
+                    val health = healthResults.firstOrNull { it.preset.url == preset.url }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (selected) ArtisanColors.GoldMist else ArtisanColors.Graphite
+                            )
+                            .clickable {
+                                customMode = false
+                                baseUrl = preset.url
+                                saved = false
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selected,
+                            onClick = {
+                                customMode = false
+                                baseUrl = preset.url
+                                saved = false
+                            },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = ArtisanColors.Champagne,
+                                unselectedColor = ArtisanColors.TextMuted
+                            )
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "${preset.label} · ${preset.desc}",
+                                style = ArtisanType.Body.copy(
+                                    fontSize = 13.sp,
+                                    color = if (selected) ArtisanColors.Champagne else ArtisanColors.TextPrimary
+                                )
+                            )
+                            Text(
+                                preset.url,
+                                style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 10.sp)
+                            )
+                        }
+                        // 健康状态徽标
+                        if (health != null) {
+                            val (badgeColor, badgeText) = when {
+                                !health.reachable -> ArtisanColors.TextMuted to health.message
+                                health.latencyMs < 300 -> ArtisanColors.Success to "${health.latencyMs}ms"
+                                health.latencyMs < 1000 -> ArtisanColors.Champagne to "${health.latencyMs}ms"
+                                else -> ArtisanColors.TextSecondary to "${health.latencyMs}ms"
+                            }
+                            Text(
+                                badgeText,
+                                style = ArtisanType.Caption.copy(color = badgeColor, fontSize = 10.sp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+
+                // 自定义地址
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (customMode) ArtisanColors.GoldMist else ArtisanColors.Graphite)
+                        .clickable {
+                            customMode = true
+                            saved = false
+                        }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = customMode,
+                        onClick = { customMode = true; saved = false },
+                        colors = RadioButtonDefaults.colors(
+                            selectedColor = ArtisanColors.Champagne,
+                            unselectedColor = ArtisanColors.TextMuted
+                        )
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "自定义中转地址",
+                        style = ArtisanType.Body.copy(
+                            fontSize = 13.sp,
+                            color = if (customMode) ArtisanColors.Champagne else ArtisanColors.TextPrimary
+                        )
+                    )
+                }
+
+                if (customMode) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = baseUrl,
+                        onValueChange = { baseUrl = it; saved = false },
+                        placeholder = { Text("https://your-relay.example.com", style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = ArtisanType.Body,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = ArtisanColors.Champagne,
+                            unfocusedBorderColor = ArtisanColors.Steel,
+                            focusedTextColor = ArtisanColors.TextPrimary,
+                            unfocusedTextColor = ArtisanColors.TextPrimary,
+                            cursorColor = ArtisanColors.Champagne,
+                            focusedContainerColor = ArtisanColors.Graphite,
+                            unfocusedContainerColor = ArtisanColors.Graphite,
+                        ),
+                        shape = RoundedCornerShape(6.dp)
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Info, null, tint = ArtisanColors.TextMuted, modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "测速探测 HTTP:${ApiKeyManager.STATUS_PORT}；生图失败时自动按顺序切换其他预设线路",
+                        style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 11.sp)
+                    )
+                }
             }
 
             // ── Agent API（AI优化/反推）卡片 ─────────────

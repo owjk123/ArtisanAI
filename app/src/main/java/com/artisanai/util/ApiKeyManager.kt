@@ -13,6 +13,16 @@ object ApiKeyManager {
     // Agent（AI优化/反推）独立API
     private const val KEY_AGENT_API_KEY = "agent_api_key"
     private const val KEY_AGENT_BASE_URL = "agent_base_url"
+    // apiyi 预设线路（按推荐顺序：大陆优先）
+    data class EndpointPreset(val label: String, val url: String, val desc: String)
+    val PRESETS = listOf(
+        EndpointPreset("大陆优化1", "https://api.apiyi.com", "国内访问推荐"),
+        EndpointPreset("大陆优化2", "https://b.apiyi.com", "国内备用节点"),
+        EndpointPreset("CF-CDN",   "https://api-cf.apiyi.com", "Cloudflare 全球"),
+        EndpointPreset("美国优化", "https://vip.apiyi.com", "海外/代理推荐"),
+    )
+    /** 健康检查端口（HTTP） */
+    const val STATUS_PORT = 16888
     private const val DEFAULT_BASE_URL = "https://api.apiyi.com"
 
     private val _apiKey = MutableStateFlow("")

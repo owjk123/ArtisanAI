@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- apiyi 线路健康检查（HTTP 端口 16888） -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">apiyi.com</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

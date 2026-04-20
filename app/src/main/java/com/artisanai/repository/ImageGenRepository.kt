@@ -28,8 +28,23 @@ class ImageGenRepository(private val context: Context) {
 
     private val gson = Gson()
     private val apiKey get() = ApiKeyManager.loadApiKey(context)
-    private val endpointUrl get() =
-        "${ApiKeyManager.loadBaseUrl(context)}/v1beta/models/gemini-3.1-flash-image-preview:generateContent"
+
+    /** 当前用户选中的首选 base url（非预设则作为唯一候选）。 */
+    private fun primaryBaseUrl(): String = ApiKeyManager.loadBaseUrl(context).trimEnd('/')
+
+    /** 构造 fallback 顺序：首选 → 其余预设。非预设（自定义地址）只用首选，不乱跳。 */
+    private fun candidateBaseUrls(): List<String> {
+        val primary = primaryBaseUrl()
+        val presetUrls = ApiKeyManager.PRESETS.map { it.url.trimEnd('/') }
+        return if (primary in presetUrls) {
+            listOf(primary) + presetUrls.filter { it != primary }
+        } else {
+            listOf(primary)
+        }
+    }
+
+    private fun toEndpointUrl(base: String): String =
+        "$base/v1beta/models/gemini-3.1-flash-image-preview:generateContent"
 
     suspend fun generateImage(
         prompt: String,
@@ -113,49 +128,84 @@ class ImageGenRepository(private val context: Context) {
         return gson.toJson(body)
     }
 
+    /**
+     * 顶层请求入口：依次尝试 候选线路。
+     * 只在"连接/网络/网关类错误"时 fallback，4xx 业务错误（401/403/400等）立刻返回不再切换。
+     */
     private fun executeRequest(bodyJson: String): Result<String> {
-        val response = client.newCall(
-            Request.Builder()
-                .url(endpointUrl)
-                .header("Authorization", "Bearer $apiKey")
-                .header("Content-Type", "application/json")
-                .post(bodyJson.toRequestBody("application/json".toMediaType()))
-                .build()
-        ).execute()
+        val candidates = candidateBaseUrls()
+        var lastErr: Exception? = null
+        for ((idx, base) in candidates.withIndex()) {
+            try {
+                val r = executeRequestOn(base, bodyJson)
+                if (r.isSuccess) {
+                    if (idx > 0) Log.i("ImageGenRepo", "Fallback succeeded on $base (idx=$idx)")
+                    return r
+                }
+                val err = r.exceptionOrNull()
+                // 业务错误（Key无效、安全审查、参数错误）不换线路
+                if (err is BusinessException) return r
+                lastErr = err as? Exception ?: Exception(err?.message ?: "未知错误")
+                Log.w("ImageGenRepo", "Endpoint $base failed, try next. ${lastErr.message}")
+            } catch (e: Exception) {
+                lastErr = e
+                Log.w("ImageGenRepo", "Endpoint $base threw, try next.", e)
+            }
+        }
+        return Result.failure(lastErr ?: Exception("所有线路均不可用"))
+    }
+
+    /** 业务错误——不应触发 fallback */
+    private class BusinessException(msg: String) : Exception(msg)
+
+    private fun executeRequestOn(base: String, bodyJson: String): Result<String> {
+        val response = try {
+            client.newCall(
+                Request.Builder()
+                    .url(toEndpointUrl(base))
+                    .header("Authorization", "Bearer $apiKey")
+                    .header("Content-Type", "application/json")
+                    .post(bodyJson.toRequestBody("application/json".toMediaType()))
+                    .build()
+            ).execute()
+        } catch (e: java.io.IOException) {
+            // 连接失败 / 超时 / socket abort → 允许 fallback
+            return Result.failure(e)
+        }
 
         val responseBody = response.body?.string()
         if (!response.isSuccessful || responseBody == null) {
-            val errMsg = when (response.code) {
-                401 -> "API Key 无效，请在设置中重新填写"
-                429 -> "请求过于频繁，请稍后再试"
-                500, 503 -> "服务器繁忙，请稍后再试"
-                else -> "请求失败 (${response.code})"
+            return when (response.code) {
+                401, 403 -> Result.failure(BusinessException("API Key 无效或无权限，请在设置中重新填写"))
+                400      -> Result.failure(BusinessException("请求参数错误 (400)"))
+                429      -> Result.failure(Exception("请求过于频繁，请稍后再试"))       // 可 fallback
+                in 500..599 -> Result.failure(Exception("服务器繁忙 (${response.code})")) // 可 fallback
+                else -> Result.failure(Exception("请求失败 (${response.code})"))
             }
-            return Result.failure(Exception(errMsg))
         }
         // 校验是否为合法 JSON（防止后台恢复后 stale 连接返回 HTML/网关错误）
         if (!responseBody.trimStart().startsWith("{")) {
-            Log.e("ImageGenRepo", "Non-JSON response (first 300 chars): ${responseBody.take(300)}")
-            return Result.failure(Exception("服务器返回异常响应，请重试"))
+            Log.e("ImageGenRepo", "Non-JSON response from $base (first 300): ${responseBody.take(300)}")
+            return Result.failure(Exception("服务器返回异常响应"))
         }
         return try {
             val json = gson.fromJson(responseBody, JsonObject::class.java)
             val candidates = json.getAsJsonArray("candidates")
-                ?: return Result.failure(Exception("API 返回空结果"))
-            if (candidates.size() == 0) return Result.failure(Exception("可能触发了安全过滤，请修改提示词"))
+                ?: return Result.failure(BusinessException("API 返回空结果"))
+            if (candidates.size() == 0) return Result.failure(BusinessException("可能触发了安全过滤，请修改提示词"))
             val content = candidates[0].asJsonObject.getAsJsonObject("content")
-                ?: return Result.failure(Exception("API 返回结构异常（无 content）"))
+                ?: return Result.failure(BusinessException("API 返回结构异常（无 content）"))
             val parts = content.getAsJsonArray("parts")
-                ?: return Result.failure(Exception("API 返回结构异常（无 parts）"))
+                ?: return Result.failure(BusinessException("API 返回结构异常（无 parts）"))
             for (part in parts) {
                 val p = part.asJsonObject
                 if (p.has("inlineData")) {
                     return Result.success(p.getAsJsonObject("inlineData").get("data").asString)
                 }
             }
-            Result.failure(Exception("响应中未找到图像数据"))
+            Result.failure(BusinessException("响应中未找到图像数据"))
         } catch (e: Exception) {
-            Log.e("ImageGenRepo", "Parse error, body (first 300): ${responseBody.take(300)}", e)
+            Log.e("ImageGenRepo", "Parse error on $base, body (first 300): ${responseBody.take(300)}", e)
             Result.failure(Exception("解析响应失败: ${e.message}"))
         }
     }

@@ -29,7 +29,7 @@ class AgentRepository(private val context: Context) {
         val presetUrls = ApiKeyManager.PRESETS.map { it.url.trimEnd('/') }
         return if (primary in presetUrls) listOf(primary) + presetUrls.filter { it != primary } else listOf(primary)
     }
-    private val model = "gemini-3.1-flash-lite-preview"
+    private val model = "gemini-3.1-flash-lite"
 
     private val customSystemPrompt get() = ApiKeyManager.loadAgentSystemPrompt(context)
         .let { if (it.isBlank()) "" else "\n\nAdditional instructions:\n$it" }

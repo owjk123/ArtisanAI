@@ -439,9 +439,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             ArtisanCard {
                 SectionLabel("关于 · ABOUT")
                 Spacer(Modifier.height(12.dp))
-                AboutRow("应用版本", "1.0.0")
-                AboutRow("图像模型", "Nano Banana 2  (gemini-3.1-flash-image-preview)")
-                AboutRow("Agent 模型", "gemini-3.1-flash-lite-preview")
+                AboutRow("应用版本", "2.0.0")
+                AboutRow("图像模型", "Nano Banana 2  (gemini-3.1-flash-image)")
+                AboutRow("Agent 模型", "gemini-3.1-flash-lite")
                 AboutRow("最大并发", "10 个任务")
                 AboutRow("默认分辨率", "2K · 9:16")
             }

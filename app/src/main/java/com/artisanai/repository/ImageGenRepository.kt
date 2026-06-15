@@ -44,7 +44,7 @@ class ImageGenRepository(private val context: Context) {
     }
 
     private fun toEndpointUrl(base: String): String =
-        "$base/v1beta/models/gemini-3.1-flash-image-preview:generateContent"
+        "$base/v1beta/models/gemini-3.1-flash-image:generateContent"
 
     suspend fun generateImage(
         prompt: String,

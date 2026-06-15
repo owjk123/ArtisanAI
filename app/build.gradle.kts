@@ -10,12 +10,12 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.artisanai"
+        applicationId = "com.artisanai.v2"
         minSdk = 26
         targetSdk = 35
         val buildNumber = (System.getenv("BUILD_NUMBER") ?: "1").toInt()
         versionCode = buildNumber
-        versionName = "1.0.$buildNumber"
+        versionName = "2.0.$buildNumber"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

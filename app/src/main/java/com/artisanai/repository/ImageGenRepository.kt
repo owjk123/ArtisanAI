@@ -64,8 +64,8 @@ class ImageGenRepository(private val context: Context) {
     }
 
     /**
-     * 图片链式编辑：每次用上一轮结果图（或源图）+ 新指令。
-     * 不传递全部历史大图，避免请求体过大导致超时/卡住。
+     * 图片链式编辑：每轮带上最新结果图（或源图）+ 编辑指令。
+     * 多轮时传递历史文本上下文，让模型理解之前做了什么编辑。
      */
     suspend fun multiTurnEditImage(
         completedTurns: List<EditTurn>,
@@ -77,10 +77,63 @@ class ImageGenRepository(private val context: Context) {
     ): Result<String> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Result.failure(Exception("请先在设置中填写 API Key"))
         try {
-            // 用最近一轮结果图作为基础；没有历史则用用户上传的源图
+            // 最新结果图作为编辑基础；没有历史则用源图
             val baseImage = completedTurns.lastOrNull { it.resultImageBase64 != null }
                 ?.resultImageBase64 ?: sourceImageBase64
-            executeRequest(buildBody(newInstruction, aspectRatio, imageSize, thinkingLevel, false, listOfNotNull(baseImage)))
+
+            // 构建带历史上下文的完整请求
+            val body = JsonObject()
+            val messages = com.google.gson.JsonArray()
+
+            // ── 历史轮次（文本上下文，帮助模型理解编辑链）──
+            for (turn in completedTurns) {
+                messages.add(JsonObject().apply {
+                    addProperty("role", "user")
+                    addProperty("content", "Edit this image: ${turn.userText}")
+                })
+                messages.add(JsonObject().apply {
+                    addProperty("role", "assistant")
+                    addProperty("content", "Image edited as requested.")
+                })
+            }
+
+            // ── 当前轮：图片 + 明确的编辑指令 ──
+            val currentParts = com.google.gson.JsonArray()
+            if (baseImage != null) {
+                currentParts.add(JsonObject().apply {
+                    addProperty("type", "image_url")
+                    add("image_url", JsonObject().apply {
+                        addProperty("url", "data:image/jpeg;base64,$baseImage")
+                    })
+                })
+            }
+            currentParts.add(JsonObject().apply {
+                addProperty("type", "text")
+                addProperty("text", "Edit this image according to this instruction: $newInstruction\n\nGenerate and return the edited image.")
+            })
+            messages.add(JsonObject().apply {
+                addProperty("role", "user")
+                add("content", currentParts)
+            })
+
+            body.addProperty("model", model)
+            body.add("messages", messages)
+            body.add("generationConfig", JsonObject().apply {
+                add("responseModalities", com.google.gson.JsonArray().apply {
+                    add("IMAGE"); add("TEXT")
+                })
+                add("imageConfig", JsonObject().apply {
+                    addProperty("aspectRatio", aspectRatio.value)
+                    addProperty("imageSize", imageSize.value)
+                })
+                if (thinkingLevel != ThinkingLevel.NONE) {
+                    add("thinkingConfig", JsonObject().apply {
+                        addProperty("thinkingLevel", thinkingLevel.value)
+                    })
+                }
+            })
+
+            parseChat(postJson(gson.toJson(body)))
         } catch (e: Exception) {
             Log.e("ImageGenRepo", "multiTurnEditImage failed", e)
             Result.failure(e)

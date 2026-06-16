@@ -431,15 +431,6 @@ private fun PromptSection(uiState: MainUiState, viewModel: MainViewModel) {
             )
         }
 
-        // 直接生图：AI优化结果预览卡
-        if (!uiState.isReverseMode && uiState.polishedPrompt.isNotBlank()) {
-            PromptResultCard(
-                label = "AI 优化结果",
-                text = uiState.polishedPrompt,
-                onClear = viewModel::clearPolishedPrompt
-            )
-        }
-
         // 反推生图：已分析的提示词预览卡（手动预分析结果）
         if (uiState.isReverseMode && uiState.reversedPrompt.isNotBlank()) {
             PromptResultCard(

@@ -142,7 +142,7 @@ class MainViewModel(
             _uiState.update { it.copy(isPolishing = true) }
             val result = agentRepo.polishPrompt(userPrompt)
             result.onSuccess { polished ->
-                _uiState.update { it.copy(polishedPrompt = polished, isPolishing = false) }
+                _uiState.update { it.copy(userPrompt = polished, polishedPrompt = "", isPolishing = false) }
             }.onFailure { e ->
                 _uiState.update { it.copy(isPolishing = false) }
                 showToast("润色失败: ${e.message}")
@@ -194,7 +194,12 @@ class MainViewModel(
         // ── 反推模式：先执行图像分析，再加队列 ─────────────
         if (state.isReverseMode && state.reverseImageBase64 != null) {
             viewModelScope.launch {
-                val reverseResult = runReversePrompt(state.reverseImageBase64)
+                // 如果已有反推结果，直接使用，不重复调用 API
+                val reverseResult = if (state.reversedPrompt.isNotBlank()) {
+                    Result.success(state.reversedPrompt)
+                } else {
+                    runReversePrompt(state.reverseImageBase64)
+                }
                 reverseResult.onSuccess { reversed ->
                     val updatedState = _uiState.value
                     val finalPrompt = buildFinalPrompt(updatedState.userPrompt.trim(), reversed)
@@ -211,7 +216,7 @@ class MainViewModel(
         }
 
         // ── 直接生图模式：使用 userPrompt + polishedPrompt ──
-        if (userPrompt.isBlank()) {
+        if (userPrompt.isBlank() && state.polishedPrompt.isBlank()) {
             showToast("请输入提示词")
             return
         }

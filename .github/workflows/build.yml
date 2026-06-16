@@ -34,7 +34,7 @@ jobs:
         run: yes | sdkmanager --licenses || true
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon --info 2>&1 | tail -200
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 

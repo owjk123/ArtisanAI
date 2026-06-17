@@ -464,22 +464,31 @@ private fun DrawingCanvasSection(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                onPathUpdate(listOf(offset))
-                                // 报告画布尺寸
-                                onCanvasSizeChanged(androidx.compose.ui.geometry.Size(
-                                    size.width.toFloat(), size.height.toFloat()
-                                ))
-                            },
-                            onDrag = { change, _ ->
-                                change.consume()
-                                onPathUpdate(currentPath + listOf(change.position))
-                            },
-                            onDragEnd = {
-                                onPathComplete()
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull() ?: continue
+                                
+                                when {
+                                    event.type == androidx.compose.ui.input.pointer.PointerEventType.Press -> {
+                                        change.consume()
+                                        onPathUpdate(listOf(change.position))
+                                        onCanvasSizeChanged(androidx.compose.ui.geometry.Size(
+                                            size.width.toFloat(), size.height.toFloat()
+                                        ))
+                                    }
+                                    event.type == androidx.compose.ui.input.pointer.PointerEventType.Move && change.pressed -> {
+                                        change.consume()
+                                        val newPath = currentPath + listOf(change.position)
+                                        onPathUpdate(newPath)
+                                    }
+                                    event.type == androidx.compose.ui.input.pointer.PointerEventType.Release -> {
+                                        change.consume()
+                                        onPathComplete()
+                                    }
+                                }
                             }
-                        )
+                        }
                     }
             ) {
                 // 绘制已完成的路径（半透明红色，用于视觉反馈）

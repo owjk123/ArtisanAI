@@ -1,9 +1,9 @@
 package com.artisanai.ui.screens
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
+import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint
-import android.graphics.Path
+import android.graphics.Path as AndroidPath
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -339,9 +339,9 @@ private fun generateMaskBitmap(
         val imgWidth = origBitmap?.width ?: 1024
         val imgHeight = origBitmap?.height ?: 1024
 
-        // 创建遮罩 bitmap（黑色背景，红色涂鸦区域）
+        // 创建遮罩 bitmap（黑色背景，白色涂鸦区域）
         val maskBitmap = Bitmap.createBitmap(imgWidth, imgHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(maskBitmap)
+        val canvas = AndroidCanvas(maskBitmap)
         // 黑色背景 = 不修改的区域
         canvas.drawColor(android.graphics.Color.BLACK)
 
@@ -361,7 +361,7 @@ private fun generateMaskBitmap(
         // 绘制涂鸦路径到遮罩
         paths.forEach { offsetPath ->
             if (offsetPath.size >= 2) {
-                val androidPath = Path()
+                val androidPath = AndroidPath()
                 androidPath.moveTo(offsetPath[0].x * scaleX, offsetPath[0].y * scaleY)
                 for (i in 1 until offsetPath.size) {
                     androidPath.lineTo(offsetPath[i].x * scaleX, offsetPath[i].y * scaleY)
@@ -383,6 +383,7 @@ private fun generateMaskBitmap(
 }
 
 // ── 涂鸦画板组件 ─────────────────────────────────────────
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DrawingCanvasSection(
     imageBase64: String,

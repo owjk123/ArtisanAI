@@ -68,11 +68,18 @@ fun ImageEditPanel(
     var canvasSize by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
 
     val imagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            val b64 = compressImageForEdit(context, it)
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        result.data?.data?.let { uri ->
+            val b64 = compressImageForEdit(context, uri)
             if (b64.isNotEmpty()) viewModel.setEditSourceImage(b64)
+        }
+    }
+
+    // 直接打开相册的 Intent
+    val galleryIntent = remember {
+        android.content.Intent(android.content.Intent.ACTION_PICK).apply {
+            type = "image/*"
         }
     }
 
@@ -114,7 +121,7 @@ fun ImageEditPanel(
                 }
                 // 更换源图
                 IconButton(
-                    onClick = { imagePicker.launch("image/*") },
+                    onClick = { imagePicker.launch(galleryIntent) },
                     modifier = Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)).background(ArtisanColors.Graphite)
                 ) {
                     Icon(Icons.Default.AddPhotoAlternate, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(16.dp))
@@ -153,7 +160,7 @@ fun ImageEditPanel(
                             .clip(RoundedCornerShape(8.dp))
                             .background(ArtisanColors.Charcoal)
                             .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(8.dp))
-                            .clickable { imagePicker.launch("image/*") }
+                            .clickable { imagePicker.launch(galleryIntent) }
                             .padding(horizontal = 24.dp, vertical = 12.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -465,10 +472,9 @@ private fun DrawingCanvasSection(
                                     size.width.toFloat(), size.height.toFloat()
                                 ))
                             },
-                            onDrag = { change, dragAmount ->
+                            onDrag = { change, _ ->
                                 change.consume()
-                                val lastPoint = currentPath.lastOrNull() ?: Offset.Zero
-                                onPathUpdate(currentPath + listOf(lastPoint + dragAmount))
+                                onPathUpdate(currentPath + listOf(change.position))
                             },
                             onDragEnd = {
                                 onPathComplete()

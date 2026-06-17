@@ -55,23 +55,30 @@ fun GeneratePanel(
     // 同步 UI 模式状态到 ViewModel
     val mode = if (uiState.isReverseMode) GenerateMode.REVERSE else GenerateMode.DIRECT
 
-    // 参考图选择器（直接进入相册，单张选择后可继续添加）
+    // 参考图选择器（直接进入系统相册）
     val refImagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            val b64 = compressImage(context, it)
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        result.data?.data?.let { uri ->
+            val b64 = compressImage(context, uri)
             if (b64.isNotEmpty()) viewModel.addReferenceImage(b64)
         }
     }
 
-    // 反推图选择器（单张）
+    // 反推图选择器（直接进入系统相册）
     val reverseImagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            val b64 = compressImage(context, it)
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        result.data?.data?.let { uri ->
+            val b64 = compressImage(context, uri)
             if (b64.isNotEmpty()) viewModel.setReverseImage(b64)
+        }
+    }
+
+    // 创建直接打开相册的 Intent
+    val galleryIntent = remember {
+        android.content.Intent(android.content.Intent.ACTION_PICK).apply {
+            type = "image/*"
         }
     }
 
@@ -99,7 +106,7 @@ fun GeneratePanel(
                 ReverseImageSection(
                     imageBase64 = uiState.reverseImageBase64,
                     isAnalyzing = uiState.isReversingPrompt,
-                    onPick = { reverseImagePicker.launch("image/*") },
+                    onPick = { reverseImagePicker.launch(galleryIntent) },
                     onClear = viewModel::clearReverseImage
                 )
             }
@@ -109,7 +116,7 @@ fun GeneratePanel(
                 images = uiState.referenceImages,
                 onAdd = {
                     if (uiState.referenceImages.size < 5) {
-                        refImagePicker.launch("image/*")
+                        refImagePicker.launch(galleryIntent)
                     }
                 },
                 onRemove = viewModel::removeReferenceImage

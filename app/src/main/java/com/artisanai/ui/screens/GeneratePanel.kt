@@ -2,7 +2,6 @@ package com.artisanai.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
@@ -56,19 +55,19 @@ fun GeneratePanel(
     // 同步 UI 模式状态到 ViewModel
     val mode = if (uiState.isReverseMode) GenerateMode.REVERSE else GenerateMode.DIRECT
 
-    // 多选参考图选择器（直接进入相册，支持多选）
-    val multiImagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(5)
-    ) { uris: List<Uri> ->
-        uris.forEach { uri ->
-            val b64 = compressImage(context, uri)
+    // 参考图选择器（直接进入相册，单张选择后可继续添加）
+    val refImagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val b64 = compressImage(context, it)
             if (b64.isNotEmpty()) viewModel.addReferenceImage(b64)
         }
     }
 
     // 反推图选择器（单张）
     val reverseImagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
+        ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
             val b64 = compressImage(context, it)
@@ -100,11 +99,7 @@ fun GeneratePanel(
                 ReverseImageSection(
                     imageBase64 = uiState.reverseImageBase64,
                     isAnalyzing = uiState.isReversingPrompt,
-                    onPick = {
-                        reverseImagePicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                    },
+                    onPick = { reverseImagePicker.launch("image/*") },
                     onClear = viewModel::clearReverseImage
                 )
             }
@@ -114,9 +109,7 @@ fun GeneratePanel(
                 images = uiState.referenceImages,
                 onAdd = {
                     if (uiState.referenceImages.size < 5) {
-                        multiImagePicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
+                        refImagePicker.launch("image/*")
                     }
                 },
                 onRemove = viewModel::removeReferenceImage

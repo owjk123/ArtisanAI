@@ -1,8 +1,11 @@
 package com.artisanai.ui.screens
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -28,8 +31,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.artisanai.data.model.EditSession
 import com.artisanai.data.model.EditTurn
@@ -38,6 +41,7 @@ import com.artisanai.ui.theme.ArtisanColors
 import com.artisanai.ui.theme.ArtisanType
 import com.artisanai.viewmodel.MainUiState
 import com.artisanai.viewmodel.MainViewModel
+import java.io.ByteArrayOutputStream
 
 @Composable
 fun ImageEditPanel(
@@ -50,10 +54,8 @@ fun ImageEditPanel(
     val session = uiState.editSession
     val listState = rememberLazyListState()
 
-    // 初次加载时清除焦点，防止键盘自动弹出
     LaunchedEffect(Unit) { focusManager.clearFocus() }
 
-    // 自动滚动到最新
     LaunchedEffect(session.turns.size) {
         if (session.turns.isNotEmpty()) listState.animateScrollToItem(session.turns.size - 1)
     }
@@ -62,9 +64,11 @@ fun ImageEditPanel(
     var showDrawingCanvas by remember { mutableStateOf(false) }
     var drawingPaths by remember { mutableStateOf(listOf<List<Offset>>()) }
     var currentPath by remember { mutableStateOf(listOf<Offset>()) }
+    // 画布尺寸（用于生成遮罩）
+    var canvasSize by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
 
     val imagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
+        ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
             val b64 = compressImageForEdit(context, it)
@@ -110,11 +114,7 @@ fun ImageEditPanel(
                 }
                 // 更换源图
                 IconButton(
-                    onClick = {
-                        imagePicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                    },
+                    onClick = { imagePicker.launch("image/*") },
                     modifier = Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)).background(ArtisanColors.Graphite)
                 ) {
                     Icon(Icons.Default.AddPhotoAlternate, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(16.dp))
@@ -153,11 +153,7 @@ fun ImageEditPanel(
                             .clip(RoundedCornerShape(8.dp))
                             .background(ArtisanColors.Charcoal)
                             .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(8.dp))
-                            .clickable {
-                                imagePicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            }
+                            .clickable { imagePicker.launch("image/*") }
                             .padding(horizontal = 24.dp, vertical = 12.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -194,13 +190,19 @@ fun ImageEditPanel(
                         drawingPaths = emptyList()
                         currentPath = emptyList()
                     },
-                    onSendWithMask = { maskBase64 ->
-                        // 将涂鸦作为遮罩发送
-                        val instruction = session.instruction.ifBlank { "根据涂鸦标记修改图片" }
-                        viewModel.sendEditWithMask(instruction, maskBase64)
-                        showDrawingCanvas = false
-                        drawingPaths = emptyList()
-                        currentPath = emptyList()
+                    onCanvasSizeChanged = { canvasSize = it },
+                    onApplyMask = {
+                        // 生成遮罩并发送
+                        if (drawingPaths.isNotEmpty() && canvasSize != androidx.compose.ui.geometry.Size.Zero) {
+                            val maskBase64 = generateMaskBitmap(drawingPaths, canvasSize, imgBase64)
+                            if (maskBase64 != null) {
+                                val instruction = session.instruction.ifBlank { "根据涂鸦标记修改图片" }
+                                viewModel.sendEditWithMask(instruction, maskBase64)
+                                showDrawingCanvas = false
+                                drawingPaths = emptyList()
+                                currentPath = emptyList()
+                            }
+                        }
                     }
                 )
             }
@@ -213,7 +215,6 @@ fun ImageEditPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 10.dp)
         ) {
-            // 首张源图（始终显示，除非已经有对话）
             session.sourceImageBase64?.let { src ->
                 if (session.turns.isEmpty() && !showDrawingCanvas) {
                     item {
@@ -222,7 +223,6 @@ fun ImageEditPanel(
                 }
             }
 
-            // 每一轮
             items(session.turns, key = { it.id }) { turn ->
                 EditTurnCard(turn = turn, onSave = { viewModel.saveEditResultToAlbum(turn) })
             }
@@ -242,7 +242,6 @@ fun ImageEditPanel(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 文本输入
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -285,13 +284,7 @@ fun ImageEditPanel(
                             RoundedCornerShape(8.dp)
                         )
                         .clickable(enabled = !session.isGenerating && session.instruction.isNotBlank()) {
-                            if (showDrawingCanvas && drawingPaths.isNotEmpty()) {
-                                // 在涂鸦模式下，先生成遮罩再发送
-                                // 这里简化处理，直接用文字指令
-                                viewModel.sendEditInstruction()
-                            } else {
-                                viewModel.sendEditInstruction()
-                            }
+                            viewModel.sendEditInstruction()
                         },
                     contentAlignment = Alignment.Center
                 ) {
@@ -311,7 +304,6 @@ fun ImageEditPanel(
                 }
             }
 
-            // 当前使用的参数提示
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -328,6 +320,62 @@ fun ImageEditPanel(
     }
 }
 
+// ── 生成遮罩 Bitmap ─────────────────────────────────────
+private fun generateMaskBitmap(
+    paths: List<List<Offset>>,
+    canvasSize: androidx.compose.ui.geometry.Size,
+    originalImageBase64: String
+): String? {
+    return try {
+        // 解析原图获取尺寸
+        val origBytes = android.util.Base64.decode(originalImageBase64, android.util.Base64.NO_WRAP)
+        val origBitmap = android.graphics.BitmapFactory.decodeByteArray(origBytes, 0, origBytes.size)
+        val imgWidth = origBitmap?.width ?: 1024
+        val imgHeight = origBitmap?.height ?: 1024
+
+        // 创建遮罩 bitmap（黑色背景，红色涂鸦区域）
+        val maskBitmap = Bitmap.createBitmap(imgWidth, imgHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(maskBitmap)
+        // 黑色背景 = 不修改的区域
+        canvas.drawColor(android.graphics.Color.BLACK)
+
+        // 计算缩放比例（Canvas 坐标 -> 图片坐标）
+        val scaleX = imgWidth.toFloat() / canvasSize.width
+        val scaleY = imgHeight.toFloat() / canvasSize.height
+
+        val paint = Paint().apply {
+            color = android.graphics.Color.WHITE  // 白色 = 需要修改的区域
+            strokeWidth = 24f * scaleX  // 粗线
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            isAntiAlias = true
+        }
+
+        // 绘制涂鸦路径到遮罩
+        paths.forEach { offsetPath ->
+            if (offsetPath.size >= 2) {
+                val androidPath = Path()
+                androidPath.moveTo(offsetPath[0].x * scaleX, offsetPath[0].y * scaleY)
+                for (i in 1 until offsetPath.size) {
+                    androidPath.lineTo(offsetPath[i].x * scaleX, offsetPath[i].y * scaleY)
+                }
+                canvas.drawPath(androidPath, paint)
+            }
+        }
+
+        // 转为 base64
+        val out = ByteArrayOutputStream()
+        maskBitmap.compress(Bitmap.CompressFormat.PNG, 90, out)
+        maskBitmap.recycle()
+        origBitmap?.recycle()
+
+        android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+    } catch (e: Exception) {
+        null
+    }
+}
+
 // ── 涂鸦画板组件 ─────────────────────────────────────────
 @Composable
 private fun DrawingCanvasSection(
@@ -337,7 +385,8 @@ private fun DrawingCanvasSection(
     onPathUpdate: (List<Offset>) -> Unit,
     onPathComplete: () -> Unit,
     onClear: () -> Unit,
-    onSendWithMask: (String) -> Unit
+    onCanvasSizeChanged: (androidx.compose.ui.geometry.Size) -> Unit,
+    onApplyMask: () -> Unit
 ) {
     val bitmap = remember(imageBase64) {
         val bytes = android.util.Base64.decode(imageBase64, android.util.Base64.NO_WRAP)
@@ -355,7 +404,7 @@ private fun DrawingCanvasSection(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("涂鸦标记（红色区域将被修改）", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
+            Text("涂鸦标记（白色区域将被修改）", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 // 清除按钮
                 Box(
@@ -367,12 +416,26 @@ private fun DrawingCanvasSection(
                 ) {
                     Text("清除", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 11.sp))
                 }
+                // 应用涂鸦按钮
+                if (paths.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ArtisanColors.Charcoal)
+                            .border(1.dp, ArtisanColors.Champagne, RoundedCornerShape(4.dp))
+                            .clickable { onApplyMask() }
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text("应用涂鸦", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
+                    }
+                }
             }
         }
 
         Spacer(Modifier.height(4.dp))
 
         // 画布
+        val density = LocalDensity.current
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -398,6 +461,10 @@ private fun DrawingCanvasSection(
                         detectDragGestures(
                             onDragStart = { offset ->
                                 onPathUpdate(listOf(offset))
+                                // 报告画布尺寸
+                                onCanvasSizeChanged(androidx.compose.ui.geometry.Size(
+                                    size.width.toFloat(), size.height.toFloat()
+                                ))
                             },
                             onDrag = { change, dragAmount ->
                                 change.consume()
@@ -410,17 +477,12 @@ private fun DrawingCanvasSection(
                         )
                     }
             ) {
-                // 绘制已完成的路径
+                // 绘制已完成的路径（半透明红色，用于视觉反馈）
                 paths.forEach { path ->
                     if (path.size >= 2) {
-                        val strokeStyle = Stroke(
-                            width = 12.dp.toPx(),
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round
-                        )
                         for (i in 0 until path.size - 1) {
                             drawLine(
-                                color = Color.Red.copy(alpha = 0.5f),
+                                color = Color.Red.copy(alpha = 0.6f),
                                 start = path[i],
                                 end = path[i + 1],
                                 strokeWidth = 12.dp.toPx(),
@@ -434,7 +496,7 @@ private fun DrawingCanvasSection(
                 if (currentPath.size >= 2) {
                     for (i in 0 until currentPath.size - 1) {
                         drawLine(
-                            color = Color.Red.copy(alpha = 0.7f),
+                            color = Color.Red.copy(alpha = 0.8f),
                             start = currentPath[i],
                             end = currentPath[i + 1],
                             strokeWidth = 12.dp.toPx(),
@@ -443,6 +505,15 @@ private fun DrawingCanvasSection(
                     }
                 }
             }
+        }
+
+        // 提示文字
+        if (paths.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "已标记 ${paths.size} 个区域，点击「应用涂鸦」发送修改请求",
+                style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 10.sp)
+            )
         }
     }
 }
@@ -478,7 +549,6 @@ private fun EditTurnCard(turn: EditTurn, onSave: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // 用户指令气泡
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
@@ -495,7 +565,6 @@ private fun EditTurnCard(turn: EditTurn, onSave: () -> Unit) {
             }
         }
 
-        // 结果图或生成中状态
         when {
             turn.isGenerating -> {
                 Row(
@@ -543,7 +612,6 @@ private fun EditTurnCard(turn: EditTurn, onSave: () -> Unit) {
                                     .clip(RoundedCornerShape(4.dp, 10.dp, 10.dp, 10.dp)),
                                 contentScale = ContentScale.Fit
                             )
-                            // 保存按钮
                             IconButton(
                                 onClick = onSave,
                                 modifier = Modifier
@@ -589,7 +657,7 @@ private fun compressImageForEdit(context: android.content.Context, uri: Uri): St
                 original, (original.width * scale).toInt(), (original.height * scale).toInt(), true
             ).also { original.recycle() }
         } else original
-        val out = java.io.ByteArrayOutputStream()
+        val out = ByteArrayOutputStream()
         bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
         bitmap.recycle()
         android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)

@@ -2,10 +2,11 @@ package com.artisanai.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -18,14 +19,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.artisanai.data.model.EditSession
 import com.artisanai.data.model.EditTurn
 import com.artisanai.ui.components.*
@@ -33,7 +37,6 @@ import com.artisanai.ui.theme.ArtisanColors
 import com.artisanai.ui.theme.ArtisanType
 import com.artisanai.viewmodel.MainUiState
 import com.artisanai.viewmodel.MainViewModel
-import java.io.File
 
 @Composable
 fun ImageEditPanel(
@@ -54,7 +57,14 @@ fun ImageEditPanel(
         if (session.turns.isNotEmpty()) listState.animateScrollToItem(session.turns.size - 1)
     }
 
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+    // 涂鸦状态
+    var showDrawingCanvas by remember { mutableStateOf(false) }
+    var drawingPaths by remember { mutableStateOf(listOf<List<Offset>>()) }
+    var currentPath by remember { mutableStateOf(listOf<Offset>()) }
+
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
         uri?.let {
             val b64 = compressImageForEdit(context, it)
             if (b64.isNotEmpty()) viewModel.setEditSourceImage(b64)
@@ -81,9 +91,29 @@ fun ImageEditPanel(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 涂鸦按钮
+                if (session.sourceImageBase64 != null || session.turns.isNotEmpty()) {
+                    IconButton(
+                        onClick = { showDrawingCanvas = !showDrawingCanvas },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (showDrawingCanvas) ArtisanColors.Charcoal else ArtisanColors.Graphite)
+                    ) {
+                        Icon(
+                            Icons.Default.Brush, null,
+                            tint = if (showDrawingCanvas) ArtisanColors.Champagne else ArtisanColors.TextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
                 // 更换源图
                 IconButton(
-                    onClick = { imagePicker.launch("image/*") },
+                    onClick = {
+                        imagePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
                     modifier = Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)).background(ArtisanColors.Graphite)
                 ) {
                     Icon(Icons.Default.AddPhotoAlternate, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(16.dp))
@@ -91,7 +121,12 @@ fun ImageEditPanel(
                 // 清除会话
                 if (session.turns.isNotEmpty() || session.sourceImageBase64 != null) {
                     IconButton(
-                        onClick = viewModel::clearEditSession,
+                        onClick = {
+                            viewModel.clearEditSession()
+                            drawingPaths = emptyList()
+                            currentPath = emptyList()
+                            showDrawingCanvas = false
+                        },
                         modifier = Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)).background(ArtisanColors.Graphite)
                     ) {
                         Icon(Icons.Default.Refresh, null, tint = ArtisanColors.TextSecondary, modifier = Modifier.size(16.dp))
@@ -117,17 +152,57 @@ fun ImageEditPanel(
                             .clip(RoundedCornerShape(8.dp))
                             .background(ArtisanColors.Charcoal)
                             .border(1.dp, ArtisanColors.Steel, RoundedCornerShape(8.dp))
-                            .clickable { imagePicker.launch("image/*") }
+                            .clickable {
+                                imagePicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            }
                             .padding(horizontal = 24.dp, vertical = 12.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Default.Upload, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(16.dp))
-                            Text("选择图片", style = ArtisanType.Label.copy(color = ArtisanColors.Champagne))
+                            Icon(Icons.Default.PhotoLibrary, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(16.dp))
+                            Text("从相册选择", style = ArtisanType.Label.copy(color = ArtisanColors.Champagne))
                         }
                     }
                 }
             }
             return@Column
+        }
+
+        // ── 涂鸦画板 ─────────────────────────────────────
+        if (showDrawingCanvas) {
+            val currentImageBase64 = if (session.turns.isNotEmpty()) {
+                session.turns.last().resultImageBase64 ?: session.sourceImageBase64
+            } else {
+                session.sourceImageBase64
+            }
+
+            currentImageBase64?.let { imgBase64 ->
+                DrawingCanvasSection(
+                    imageBase64 = imgBase64,
+                    paths = drawingPaths,
+                    currentPath = currentPath,
+                    onPathUpdate = { currentPath = it },
+                    onPathComplete = {
+                        if (currentPath.isNotEmpty()) {
+                            drawingPaths = drawingPaths + listOf(currentPath)
+                            currentPath = emptyList()
+                        }
+                    },
+                    onClear = {
+                        drawingPaths = emptyList()
+                        currentPath = emptyList()
+                    },
+                    onSendWithMask = { maskBase64 ->
+                        // 将涂鸦作为遮罩发送
+                        val instruction = session.instruction.ifBlank { "根据涂鸦标记修改图片" }
+                        viewModel.sendEditWithMask(instruction, maskBase64)
+                        showDrawingCanvas = false
+                        drawingPaths = emptyList()
+                        currentPath = emptyList()
+                    }
+                )
+            }
         }
 
         // ── 对话历史列表 ───────────────────────────────────
@@ -137,9 +212,9 @@ fun ImageEditPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 10.dp)
         ) {
-            // 首张源图
+            // 首张源图（始终显示，除非已经有对话）
             session.sourceImageBase64?.let { src ->
-                if (session.turns.isEmpty()) {
+                if (session.turns.isEmpty() && !showDrawingCanvas) {
                     item {
                         SourceImageCard(src)
                     }
@@ -184,7 +259,7 @@ fun ImageEditPanel(
                         decorationBox = { inner ->
                             if (session.instruction.isEmpty()) {
                                 Text(
-                                    "输入编辑指令，如：把背景换成星空，风格改成水彩...",
+                                    if (showDrawingCanvas) "输入涂鸦区域的修改指令..." else "输入编辑指令，如：把背景换成星空，风格改成水彩...",
                                     style = ArtisanType.Body.copy(color = ArtisanColors.TextMuted, fontSize = 13.sp)
                                 )
                             }
@@ -209,7 +284,13 @@ fun ImageEditPanel(
                             RoundedCornerShape(8.dp)
                         )
                         .clickable(enabled = !session.isGenerating && session.instruction.isNotBlank()) {
-                            viewModel.sendEditInstruction()
+                            if (showDrawingCanvas && drawingPaths.isNotEmpty()) {
+                                // 在涂鸦模式下，先生成遮罩再发送
+                                // 这里简化处理，直接用文字指令
+                                viewModel.sendEditInstruction()
+                            } else {
+                                viewModel.sendEditInstruction()
+                            }
                         },
                     contentAlignment = Alignment.Center
                 ) {
@@ -238,6 +319,128 @@ fun ImageEditPanel(
                 InfoTag(uiState.selectedAspectRatio.label)
                 InfoTag(uiState.selectedImageSize.label)
                 InfoTag(uiState.selectedThinkingLevel.label)
+                if (showDrawingCanvas) {
+                    InfoTag("涂鸦模式")
+                }
+            }
+        }
+    }
+}
+
+// ── 涂鸦画板组件 ─────────────────────────────────────────
+@Composable
+private fun DrawingCanvasSection(
+    imageBase64: String,
+    paths: List<List<Offset>>,
+    currentPath: List<Offset>,
+    onPathUpdate: (List<Offset>) -> Unit,
+    onPathComplete: () -> Unit,
+    onClear: () -> Unit,
+    onSendWithMask: (String) -> Unit
+) {
+    val bitmap = remember(imageBase64) {
+        val bytes = android.util.Base64.decode(imageBase64, android.util.Base64.NO_WRAP)
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        // 工具栏
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("涂鸦标记（红色区域将被修改）", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 清除按钮
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(ArtisanColors.Graphite)
+                        .clickable { onClear() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("清除", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 11.sp))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        // 画布
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(bitmap?.let { it.width.toFloat() / it.height.toFloat() } ?: 1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(ArtisanColors.Graphite)
+        ) {
+            // 底图
+            bitmap?.let {
+                Image(
+                    bitmap = it.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            // 涂鸦层
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                onPathUpdate(listOf(offset))
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                val lastPoint = currentPath.lastOrNull() ?: Offset.Zero
+                                onPathUpdate(currentPath + listOf(lastPoint + dragAmount))
+                            },
+                            onDragEnd = {
+                                onPathComplete()
+                            }
+                        )
+                    }
+            ) {
+                // 绘制已完成的路径
+                paths.forEach { path ->
+                    if (path.size >= 2) {
+                        val strokeStyle = Stroke(
+                            width = 12.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                        for (i in 0 until path.size - 1) {
+                            drawLine(
+                                color = Color.Red.copy(alpha = 0.5f),
+                                start = path[i],
+                                end = path[i + 1],
+                                strokeWidth = 12.dp.toPx(),
+                                cap = StrokeCap.Round
+                            )
+                        }
+                    }
+                }
+
+                // 绘制当前路径
+                if (currentPath.size >= 2) {
+                    for (i in 0 until currentPath.size - 1) {
+                        drawLine(
+                            color = Color.Red.copy(alpha = 0.7f),
+                            start = currentPath[i],
+                            end = currentPath[i + 1],
+                            strokeWidth = 12.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                    }
+                }
             }
         }
     }

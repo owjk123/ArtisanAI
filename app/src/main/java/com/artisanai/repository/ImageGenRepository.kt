@@ -66,6 +66,7 @@ class ImageGenRepository(private val context: Context) {
     /**
      * 图片链式编辑：每轮带上最新结果图（或源图）+ 编辑指令。
      * 多轮时在提示词中附带历史上下文，让模型理解之前做了什么编辑。
+     * 支持涂鸦遮罩：maskImageBase64 为红色涂鸦标记的遮罩图。
      */
     suspend fun multiTurnEditImage(
         completedTurns: List<EditTurn>,
@@ -73,7 +74,8 @@ class ImageGenRepository(private val context: Context) {
         sourceImageBase64: String?,
         aspectRatio: AspectRatio = AspectRatio.SQUARE_1_1,
         imageSize: ImageSize = ImageSize.SIZE_2K,
-        thinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL
+        thinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL,
+        maskImageBase64: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Result.failure(Exception("请先在设置中填写 API Key"))
         try {
@@ -81,9 +83,13 @@ class ImageGenRepository(private val context: Context) {
             val baseImage = completedTurns.lastOrNull { it.resultImageBase64 != null }
                 ?.resultImageBase64 ?: sourceImageBase64
 
-            // 构建编辑提示词：前缀说明 + 历史上下文 + 当前指令
+            // 构建编辑提示词
             val editPrompt = buildString {
                 append("Edit the following image. ")
+                if (maskImageBase64 != null) {
+                    append("The red-marked areas in the mask image indicate regions that need to be modified. ")
+                    append("Focus your edits on these marked regions. ")
+                }
                 if (completedTurns.isNotEmpty()) {
                     append("Previous edits: ")
                     completedTurns.forEachIndexed { i, turn ->
@@ -94,7 +100,10 @@ class ImageGenRepository(private val context: Context) {
                 append("Instruction: $newInstruction")
             }
 
-            val images = listOfNotNull(baseImage)
+            val images = mutableListOf<String>()
+            baseImage?.let { images.add(it) }
+            maskImageBase64?.let { images.add(it) }
+
             executeRequest(buildBody(editPrompt, aspectRatio, imageSize, thinkingLevel, false, images))
         } catch (e: Exception) {
             Log.e("ImageGenRepo", "multiTurnEditImage failed", e)

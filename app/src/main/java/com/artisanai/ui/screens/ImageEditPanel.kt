@@ -215,11 +215,10 @@ fun ImageEditPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 10.dp)
         ) {
+            // 源图始终显示在顶部
             session.sourceImageBase64?.let { src ->
-                if (session.turns.isEmpty() && !showDrawingCanvas) {
-                    item {
-                        SourceImageCard(src)
-                    }
+                item(key = "source") {
+                    SourceImageCard(src)
                 }
             }
 

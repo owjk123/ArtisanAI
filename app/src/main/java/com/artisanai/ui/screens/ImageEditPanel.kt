@@ -459,64 +459,71 @@ private fun DrawingCanvasSection(
                 )
             }
 
-            // 涂鸦层
+            // 涂鸦层 - 使用 Path 对象绘制平滑线条
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val change = event.changes.firstOrNull() ?: continue
-                                
-                                when {
-                                    event.type == androidx.compose.ui.input.pointer.PointerEventType.Press -> {
-                                        change.consume()
-                                        onPathUpdate(listOf(change.position))
-                                        onCanvasSizeChanged(androidx.compose.ui.geometry.Size(
-                                            size.width.toFloat(), size.height.toFloat()
-                                        ))
-                                    }
-                                    event.type == androidx.compose.ui.input.pointer.PointerEventType.Move && change.pressed -> {
-                                        change.consume()
-                                        val newPath = currentPath + listOf(change.position)
-                                        onPathUpdate(newPath)
-                                    }
-                                    event.type == androidx.compose.ui.input.pointer.PointerEventType.Release -> {
-                                        change.consume()
-                                        onPathComplete()
-                                    }
-                                }
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                // 开始新路径
+                                val newPath = Path().apply { moveTo(offset.x, offset.y) }
+                                onPathUpdate(listOf(offset))
+                                onCanvasSizeChanged(androidx.compose.ui.geometry.Size(
+                                    size.width.toFloat(), size.height.toFloat()
+                                ))
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                // 添加历史点和当前点，使线条更平滑
+                                val historicalPoints = change.historical.map { it.position }
+                                val allNewPoints = historicalPoints + change.position
+                                onPathUpdate(currentPath + allNewPoints)
+                            },
+                            onDragEnd = {
+                                onPathComplete()
                             }
-                        }
+                        )
                     }
             ) {
-                // 绘制已完成的路径（半透明红色，用于视觉反馈）
-                paths.forEach { path ->
-                    if (path.size >= 2) {
-                        for (i in 0 until path.size - 1) {
-                            drawLine(
-                                color = Color.Red.copy(alpha = 0.6f),
-                                start = path[i],
-                                end = path[i + 1],
-                                strokeWidth = 12.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
+                // 绘制已完成的路径
+                paths.forEach { pathPoints ->
+                    if (pathPoints.size >= 2) {
+                        val path = Path().apply {
+                            moveTo(pathPoints[0].x, pathPoints[0].y)
+                            for (i in 1 until pathPoints.size) {
+                                lineTo(pathPoints[i].x, pathPoints[i].y)
+                            }
                         }
+                        drawPath(
+                            path = path,
+                            color = Color.Red.copy(alpha = 0.6f),
+                            style = Stroke(
+                                width = 12.dp.toPx(),
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round
+                            )
+                        )
                     }
                 }
 
                 // 绘制当前路径
                 if (currentPath.size >= 2) {
-                    for (i in 0 until currentPath.size - 1) {
-                        drawLine(
-                            color = Color.Red.copy(alpha = 0.8f),
-                            start = currentPath[i],
-                            end = currentPath[i + 1],
-                            strokeWidth = 12.dp.toPx(),
-                            cap = StrokeCap.Round
-                        )
+                    val path = Path().apply {
+                        moveTo(currentPath[0].x, currentPath[0].y)
+                        for (i in 1 until currentPath.size) {
+                            lineTo(currentPath[i].x, currentPath[i].y)
+                        }
                     }
+                    drawPath(
+                        path = path,
+                        color = Color.Red.copy(alpha = 0.8f),
+                        style = Stroke(
+                            width = 12.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
                 }
             }
         }

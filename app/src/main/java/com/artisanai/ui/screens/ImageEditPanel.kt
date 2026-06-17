@@ -383,7 +383,6 @@ private fun generateMaskBitmap(
 }
 
 // ── 涂鸦画板组件 ─────────────────────────────────────────
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DrawingCanvasSection(
     imageBase64: String,
@@ -476,10 +475,8 @@ private fun DrawingCanvasSection(
                             },
                             onDrag = { change, _ ->
                                 change.consume()
-                                // 添加历史点和当前点，使线条更平滑
-                                val historicalPoints = change.historical.map { it.position }
-                                val allNewPoints = historicalPoints + change.position
-                                onPathUpdate(currentPath + allNewPoints)
+                                // 直接使用当前点
+                                onPathUpdate(currentPath + change.position)
                             },
                             onDragEnd = {
                                 onPathComplete()

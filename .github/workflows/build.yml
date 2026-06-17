@@ -37,11 +37,13 @@ jobs:
         run: ./gradlew assembleDebug --stacktrace --no-daemon
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+          BUILD_NUMBER: "${{ github.run_number }}"
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace --no-daemon
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+          BUILD_NUMBER: "${{ github.run_number }}"
 
       - name: List outputs
         run: find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \;

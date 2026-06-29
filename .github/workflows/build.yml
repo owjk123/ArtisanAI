@@ -33,17 +33,28 @@ jobs:
       - name: Accept Android SDK Licenses
         run: yes | sdkmanager --licenses || true
 
+      - name: Decode signing keystore
+        run: echo "${{ secrets.ARTISAN_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/artisan-release.jks"
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace --no-daemon
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
           BUILD_NUMBER: "${{ github.run_number }}"
+          ARTISAN_KEYSTORE_FILE: "${{ runner.temp }}/artisan-release.jks"
+          ARTISAN_KEYSTORE_PASSWORD: "${{ secrets.ARTISAN_KEYSTORE_PASSWORD }}"
+          ARTISAN_KEY_ALIAS: "${{ secrets.ARTISAN_KEY_ALIAS }}"
+          ARTISAN_KEY_PASSWORD: "${{ secrets.ARTISAN_KEY_PASSWORD }}"
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace --no-daemon
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
           BUILD_NUMBER: "${{ github.run_number }}"
+          ARTISAN_KEYSTORE_FILE: "${{ runner.temp }}/artisan-release.jks"
+          ARTISAN_KEYSTORE_PASSWORD: "${{ secrets.ARTISAN_KEYSTORE_PASSWORD }}"
+          ARTISAN_KEY_ALIAS: "${{ secrets.ARTISAN_KEY_ALIAS }}"
+          ARTISAN_KEY_PASSWORD: "${{ secrets.ARTISAN_KEY_PASSWORD }}"
 
       - name: List outputs
         run: find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \;

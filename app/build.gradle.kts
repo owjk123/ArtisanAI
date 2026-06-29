@@ -24,6 +24,22 @@ android {
         buildConfigField("String", "APIYI_KEY", "\"$apiKey\"")
     }
 
+    // 固定签名：CI 通过环境变量注入密钥库（来自 GitHub Secrets，解码到临时文件）。
+    // 缺失时回退到 debug 签名，保证本地 / fork 无密钥也能编译。
+    val releaseKeystore = System.getenv("ARTISAN_KEYSTORE_FILE")
+    val hasReleaseSigning = !releaseKeystore.isNullOrBlank() && file(releaseKeystore).exists()
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("ARTISAN_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ARTISAN_KEY_ALIAS")
+                keyPassword = System.getenv("ARTISAN_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -31,7 +47,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning)
+                signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+        }
+        debug {
+            // debug 包也用固定密钥签名，这样无论装 debug 还是 release，后续都能覆盖升级
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
 

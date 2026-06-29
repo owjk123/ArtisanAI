@@ -57,17 +57,34 @@ class GalleryRepository(
     }
 
     /**
-     * 下载图片到系统相册
+     * 下载图片到系统相册（从内部文件路径）
      */
     suspend fun saveToAlbum(id: String, imagePath: String): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            val bitmap = BitmapFactory.decodeFile(imagePath)
-                ?: return@withContext Result.failure(Exception("无法读取图片文件"))
+        val bitmap = BitmapFactory.decodeFile(imagePath)
+            ?: return@withContext Result.failure(Exception("无法读取图片文件"))
+        writeBitmapToAlbum(bitmap).also { if (it.isSuccess) runCatching { galleryDao.markSavedToAlbum(id) } }
+    }
 
+    /**
+     * 下载图片到系统相册（直接从 base64，不依赖内部文件是否已落盘）。
+     * 编辑结果用这个，避免手拼路径出错。
+     */
+    suspend fun saveToAlbumFromBase64(base64: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val bytes = try {
+            Base64.getDecoder().decode(base64)
+        } catch (e: Exception) {
+            return@withContext Result.failure(Exception("图片数据无效"))
+        }
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: return@withContext Result.failure(Exception("无法解码图片"))
+        writeBitmapToAlbum(bitmap)
+    }
+
+    /** 把 Bitmap 写入系统相册的公共实现（MediaStore / 旧版外存）。 */
+    private fun writeBitmapToAlbum(bitmap: Bitmap): Result<Unit> {
+        return try {
             val filename = "ArtisanAI_${System.currentTimeMillis()}.png"
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10+ 使用MediaStore
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, filename)
                     put(MediaStore.Images.Media.MIME_TYPE, "image/png")
@@ -76,17 +93,16 @@ class GalleryRepository(
                 }
                 val uri = context.contentResolver.insert(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
-                ) ?: return@withContext Result.failure(Exception("创建媒体文件失败"))
+                ) ?: return Result.failure(Exception("创建媒体文件失败"))
 
                 context.contentResolver.openOutputStream(uri)?.use { out ->
                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                }
+                } ?: return Result.failure(Exception("无法写入相册"))
 
                 values.clear()
                 values.put(MediaStore.Images.Media.IS_PENDING, 0)
                 context.contentResolver.update(uri, values, null, null)
             } else {
-                // Android 9及以下
                 val picturesDir = Environment.getExternalStoragePublicDirectory(
                     Environment.DIRECTORY_PICTURES
                 )
@@ -95,13 +111,10 @@ class GalleryRepository(
                 FileOutputStream(file).use { out ->
                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
                 }
-                // 通知媒体库
                 android.media.MediaScannerConnection.scanFile(
                     context, arrayOf(file.absolutePath), null, null
                 )
             }
-
-            galleryDao.markSavedToAlbum(id)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)

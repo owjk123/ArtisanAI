@@ -78,7 +78,8 @@ class ImageGenRepository(private val context: Context) {
     /**
      * 图片链式编辑：每轮带上最新结果图（或源图）+ 编辑指令。
      * 多轮时在提示词中附带历史上下文，让模型理解之前做了什么编辑。
-     * 支持涂鸦遮罩：maskImageBase64 为红色涂鸦标记的遮罩图。
+     * 局部涂鸦：markedImageBase64 是把半透明红痕烧进去的整图，作为本轮基准图直接发送
+     * （Gemini 不支持独立 mask 输入，所以用"在图上标红"这种它能看懂的方式）。
      */
     suspend fun multiTurnEditImage(
         completedTurns: List<EditTurn>,
@@ -87,36 +88,34 @@ class ImageGenRepository(private val context: Context) {
         aspectRatio: AspectRatio = AspectRatio.SQUARE_1_1,
         imageSize: ImageSize = ImageSize.SIZE_2K,
         thinkingLevel: ThinkingLevel = ThinkingLevel.MINIMAL,
-        maskImageBase64: String? = null
+        markedImageBase64: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Result.failure(Exception("请先在设置中填写 API Key"))
         try {
-            // 最新结果图作为编辑基础；没有历史则用源图
-            val baseImage = completedTurns.lastOrNull { it.resultImageBase64 != null }
-                ?.resultImageBase64 ?: sourceImageBase64
+            // 基准图优先级：涂鸦整图 > 上一轮结果 > 源图
+            val baseImage = markedImageBase64
+                ?: completedTurns.lastOrNull { it.resultImageBase64 != null }?.resultImageBase64
+                ?: sourceImageBase64
+                ?: return@withContext Result.failure(Exception("没有可编辑的图片"))
 
-            // 构建编辑提示词
             val editPrompt = buildString {
-                append("Edit the following image. ")
-                if (maskImageBase64 != null) {
-                    append("The red-marked areas in the mask image indicate regions that need to be modified. ")
-                    append("Focus your edits on these marked regions. ")
+                append("Edit this image. ")
+                if (markedImageBase64 != null) {
+                    append("The areas covered by semi-transparent red brush strokes mark where to apply the change. ")
+                    append("Apply the edit only within those marked areas, keep the rest of the image identical, ")
+                    append("and do NOT leave any red marks in the output. ")
                 }
                 if (completedTurns.isNotEmpty()) {
-                    append("Previous edits: ")
+                    append("Earlier edit steps were: ")
                     completedTurns.forEachIndexed { i, turn ->
                         append("${i + 1}) ${turn.userText}. ")
                     }
-                    append("Continue editing based on the history above. ")
+                    append("Continue from the current image. ")
                 }
                 append("Instruction: $newInstruction")
             }
 
-            val images = mutableListOf<String>()
-            baseImage?.let { images.add(it) }
-            maskImageBase64?.let { images.add(it) }
-
-            executeRequest(buildBody(editPrompt, aspectRatio, imageSize, thinkingLevel, false, images))
+            executeRequest(buildBody(editPrompt, aspectRatio, imageSize, thinkingLevel, false, listOf(baseImage)))
         } catch (e: CancellationException) {
             throw e   // 取消/超时必须向上传递，不能吞掉
         } catch (e: Exception) {

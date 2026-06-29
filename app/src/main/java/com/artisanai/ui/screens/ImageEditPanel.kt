@@ -64,8 +64,15 @@ fun ImageEditPanel(
     var showDrawingCanvas by remember { mutableStateOf(false) }
     var drawingPaths by remember { mutableStateOf(listOf<List<Offset>>()) }
     var currentPath by remember { mutableStateOf(listOf<Offset>()) }
-    // 画布尺寸（用于生成遮罩）
+    // 画布尺寸（用于把涂鸦坐标换算到图片像素）
     var canvasSize by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
+
+    // 换源图后清掉残留涂鸦
+    LaunchedEffect(session.sourceImageBase64) {
+        drawingPaths = emptyList()
+        currentPath = emptyList()
+        showDrawingCanvas = false
+    }
 
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -199,12 +206,11 @@ fun ImageEditPanel(
                     },
                     onCanvasSizeChanged = { canvasSize = it },
                     onApplyMask = {
-                        // 生成遮罩并发送
+                        // 把红痕烧进整图后发送（而不是单独发黑白遮罩）
                         if (drawingPaths.isNotEmpty() && canvasSize != androidx.compose.ui.geometry.Size.Zero) {
-                            val maskBase64 = generateMaskBitmap(drawingPaths, canvasSize, imgBase64)
-                            if (maskBase64 != null) {
-                                val instruction = session.instruction.ifBlank { "根据涂鸦标记修改图片" }
-                                viewModel.sendEditWithMask(instruction, maskBase64)
+                            val marked = generateMarkedImageBitmap(drawingPaths, canvasSize, imgBase64)
+                            if (marked != null) {
+                                viewModel.sendEditWithMarkedImage(session.instruction, marked)
                                 showDrawingCanvas = false
                                 drawingPaths = emptyList()
                                 currentPath = emptyList()
@@ -274,32 +280,34 @@ fun ImageEditPanel(
                     )
                 }
 
-                // 发送按钮
+                // 发送 / 取消按钮（生成中点一下可取消）
+                val canSend = !session.isGenerating && session.instruction.isNotBlank()
                 Box(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (!session.isGenerating && session.instruction.isNotBlank())
-                                ArtisanColors.Charcoal else ArtisanColors.Graphite
-                        )
+                        .background(if (canSend) ArtisanColors.Charcoal else ArtisanColors.Graphite)
                         .border(
                             1.dp,
-                            if (!session.isGenerating && session.instruction.isNotBlank())
-                                ArtisanColors.Champagne else ArtisanColors.Steel,
+                            if (session.isGenerating || canSend) ArtisanColors.Champagne else ArtisanColors.Steel,
                             RoundedCornerShape(8.dp)
                         )
-                        .clickable(enabled = !session.isGenerating && session.instruction.isNotBlank()) {
-                            viewModel.sendEditInstruction()
+                        .clickable(enabled = session.isGenerating || canSend) {
+                            if (session.isGenerating) viewModel.cancelEdit()
+                            else viewModel.sendEditInstruction()
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     if (session.isGenerating) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = ArtisanColors.Champagne
-                        )
+                        // 转圈中叠一个 ✕，提示可点取消
+                        Box(contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(26.dp),
+                                strokeWidth = 2.dp,
+                                color = ArtisanColors.Champagne
+                            )
+                            Icon(Icons.Default.Close, "取消", tint = ArtisanColors.Champagne, modifier = Modifier.size(12.dp))
+                        }
                     } else {
                         Icon(
                             Icons.Default.Send, null,
@@ -326,39 +334,39 @@ fun ImageEditPanel(
     }
 }
 
-// ── 生成遮罩 Bitmap ─────────────────────────────────────
-private fun generateMaskBitmap(
+// ── 把涂鸦红痕烧进整图 ───────────────────────────────────
+// 在原图副本上画半透明红色笔迹，返回整图 base64。Gemini 看得懂"图上标红的区域"，
+// 比单独发黑白遮罩可靠得多。
+private fun generateMarkedImageBitmap(
     paths: List<List<Offset>>,
     canvasSize: androidx.compose.ui.geometry.Size,
-    originalImageBase64: String
+    baseImageBase64: String
 ): String? {
     return try {
-        // 解析原图获取尺寸
-        val origBytes = android.util.Base64.decode(originalImageBase64, android.util.Base64.NO_WRAP)
-        val origBitmap = android.graphics.BitmapFactory.decodeByteArray(origBytes, 0, origBytes.size)
-        val imgWidth = origBitmap?.width ?: 1024
-        val imgHeight = origBitmap?.height ?: 1024
+        if (canvasSize.width <= 0f || canvasSize.height <= 0f) return null
+        val bytes = android.util.Base64.decode(baseImageBase64, android.util.Base64.NO_WRAP)
+        val src = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val imgWidth = src.width
+        val imgHeight = src.height
 
-        // 创建遮罩 bitmap（黑色背景，白色涂鸦区域）
-        val maskBitmap = Bitmap.createBitmap(imgWidth, imgHeight, Bitmap.Config.ARGB_8888)
-        val canvas = AndroidCanvas(maskBitmap)
-        // 黑色背景 = 不修改的区域
-        canvas.drawColor(android.graphics.Color.BLACK)
+        // 可变副本用于绘制
+        val marked = src.copy(Bitmap.Config.ARGB_8888, true)
+        src.recycle()
+        if (marked == null) return null
 
-        // 计算缩放比例（Canvas 坐标 -> 图片坐标）
+        val canvas = AndroidCanvas(marked)
         val scaleX = imgWidth.toFloat() / canvasSize.width
         val scaleY = imgHeight.toFloat() / canvasSize.height
 
         val paint = Paint().apply {
-            color = android.graphics.Color.WHITE  // 白色 = 需要修改的区域
-            strokeWidth = 24f * scaleX  // 粗线
+            color = android.graphics.Color.argb(150, 255, 0, 0)  // 半透明红
+            strokeWidth = 26f * scaleX
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
             isAntiAlias = true
         }
 
-        // 绘制涂鸦路径到遮罩
         paths.forEach { offsetPath ->
             if (offsetPath.size >= 2) {
                 val androidPath = AndroidPath()
@@ -370,12 +378,9 @@ private fun generateMaskBitmap(
             }
         }
 
-        // 转为 base64
         val out = ByteArrayOutputStream()
-        maskBitmap.compress(Bitmap.CompressFormat.PNG, 90, out)
-        maskBitmap.recycle()
-        origBitmap?.recycle()
-
+        marked.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        marked.recycle()
         android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
     } catch (e: Exception) {
         null
@@ -464,23 +469,25 @@ private fun DrawingCanvasSection(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
+                        // 先把画布像素尺寸报上去（生成红痕整图时按它换算坐标）
+                        onCanvasSizeChanged(androidx.compose.ui.geometry.Size(
+                            size.width.toFloat(), size.height.toFloat()
+                        ))
+                        // 本地累积当前笔画的点。原 bug：onDrag 里用的是 pointerInput 首次
+                        // 组合时捕获的过期 currentPath 参数（恒为空），导致每笔只剩一个点画不出线。
+                        var stroke = mutableListOf<Offset>()
                         detectDragGestures(
                             onDragStart = { offset ->
-                                // 开始新路径
-                                val newPath = Path().apply { moveTo(offset.x, offset.y) }
-                                onPathUpdate(listOf(offset))
-                                onCanvasSizeChanged(androidx.compose.ui.geometry.Size(
-                                    size.width.toFloat(), size.height.toFloat()
-                                ))
+                                stroke = mutableListOf(offset)
+                                onPathUpdate(stroke.toList())
                             },
                             onDrag = { change, _ ->
                                 change.consume()
-                                // 直接使用当前点
-                                onPathUpdate(currentPath + change.position)
+                                stroke.add(change.position)
+                                onPathUpdate(stroke.toList())
                             },
-                            onDragEnd = {
-                                onPathComplete()
-                            }
+                            onDragEnd = { onPathComplete() },
+                            onDragCancel = { onPathComplete() }
                         )
                     }
             ) {

@@ -76,6 +76,9 @@ class MainViewModel(
     // 每个任务的执行 Job，用于"取消"按钮主动中断卡住的任务
     private val taskJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
+    // 当前图片编辑的执行 Job，用于取消/超时
+    private var editJob: Job? = null
+
     companion object {
         // 单个生图任务的总时长上限：超过即判定卡死，置为失败让用户重试，
         // 而不是无限停在进度条上不知道死活。
@@ -430,9 +433,29 @@ class MainViewModel(
         _uiState.update { it.copy(editSession = EditSession()) }
     }
 
+    /** 文字编辑：用输入框里的指令编辑当前图。 */
     fun sendEditInstruction() {
+        val instruction = _uiState.value.editSession.instruction.trim()
+        startEditTurn(instruction = instruction, markedImageBase64 = null, displayText = instruction)
+    }
+
+    /** 涂鸦编辑：markedImageBase64 是把红痕烧进去的整图，作为本轮基准图。 */
+    fun sendEditWithMarkedImage(instruction: String, markedImageBase64: String) {
+        val clean = instruction.trim().ifBlank { "按红色标记区域修改" }
+        startEditTurn(instruction = clean, markedImageBase64 = markedImageBase64, displayText = "[涂鸦] $clean")
+    }
+
+    /** 取消正在进行的编辑。 */
+    fun cancelEdit() {
+        editJob?.cancel()
+    }
+
+    /**
+     * 编辑统一入口：文字编辑与涂鸦编辑共用，带超时 / 取消 / 错误回写。
+     * markedImageBase64 非空 = 局部涂鸦编辑（整图已烧红痕），作为本轮基准图。
+     */
+    private fun startEditTurn(instruction: String, markedImageBase64: String?, displayText: String) {
         val session = _uiState.value.editSession
-        val instruction = session.instruction.trim()
         if (instruction.isBlank()) { showToast("请输入编辑指令"); return }
         if (session.turns.isEmpty() && session.sourceImageBase64 == null) {
             showToast("请先上传要编辑的图片"); return
@@ -440,9 +463,10 @@ class MainViewModel(
         if (session.isGenerating) return
 
         val newTurn = EditTurn(
-            userText = instruction,
+            userText = displayText,
             inputImageBase64 = if (session.turns.isEmpty()) session.sourceImageBase64 else null
         )
+        val turnId = newTurn.id
         _uiState.update { it.copy(
             editSession = it.editSession.copy(
                 turns = it.editSession.turns + newTurn.copy(isGenerating = true),
@@ -451,30 +475,32 @@ class MainViewModel(
             )
         )}
 
-        val turnId = newTurn.id
-        val sourceImage = session.sourceImageBase64
-
-        // 启动前台保活服务，防止后台 socket 被关闭
+        // 启动前台保活服务，防止后台 socket 被系统关闭
         appContext.startForegroundService(
             Intent(appContext, GenerationForegroundService::class.java)
         )
 
-        viewModelScope.launch {
+        editJob = viewModelScope.launch {
             try {
-                val completedTurns = _uiState.value.editSession.turns.dropLast(1)
-                    .filter { it.resultImageBase64 != null }
+                val snapshot = _uiState.value.editSession
+                val completedTurns = snapshot.turns.dropLast(1).filter { it.resultImageBase64 != null }
                 val state = _uiState.value
+                // 编辑按源图比例输出，避免被「生成」页选的宽高比拉伸/裁切
+                val ratio = snapshot.sourceImageBase64?.let { nearestAspectRatio(it) } ?: state.selectedAspectRatio
 
-                val result = imageGenRepo.multiTurnEditImage(
-                    completedTurns = completedTurns,
-                    newInstruction = instruction,
-                    sourceImageBase64 = sourceImage,
-                    aspectRatio = state.selectedAspectRatio,
-                    imageSize = state.selectedImageSize,
-                    thinkingLevel = state.selectedThinkingLevel
-                )
+                val result = withTimeoutOrNull(GEN_TIMEOUT_MS) {
+                    imageGenRepo.multiTurnEditImage(
+                        completedTurns = completedTurns,
+                        newInstruction = instruction,
+                        sourceImageBase64 = snapshot.sourceImageBase64,
+                        aspectRatio = ratio,
+                        imageSize = state.selectedImageSize,
+                        thinkingLevel = state.selectedThinkingLevel,
+                        markedImageBase64 = markedImageBase64
+                    )
+                }
 
-                val base64 = result.getOrNull()
+                val base64 = result?.getOrNull()
                 if (base64 != null) {
                     _uiState.update { st ->
                         st.copy(editSession = st.editSession.copy(
@@ -484,157 +510,76 @@ class MainViewModel(
                             isGenerating = false
                         ))
                     }
-                    // 保存到图库（独立协程，不影响编辑流程）
+                    // 落盘到图库（失败不影响结果展示）
                     runCatching {
                         galleryRepo.saveGeneratedImage(
-                            id = turnId,
-                            base64Data = base64,
-                            prompt = instruction,
-                            aspectRatio = state.selectedAspectRatio.value,
-                            imageSize = state.selectedImageSize.value
+                            id = turnId, base64Data = base64, prompt = instruction,
+                            aspectRatio = ratio.value, imageSize = state.selectedImageSize.value
                         )
                     }
                 } else {
-                    val errMsg = result.exceptionOrNull()?.message ?: "未知错误"
-                    _uiState.update { st ->
-                        st.copy(editSession = st.editSession.copy(
-                            turns = st.editSession.turns.map { t ->
-                                if (t.id == turnId) t.copy(error = errMsg, isGenerating = false) else t
-                            },
-                            isGenerating = false
-                        ))
-                    }
+                    val errMsg = if (result == null)
+                        "编辑超时（超过 ${GEN_TIMEOUT_MS / 1000} 秒），请重试"
+                    else result.exceptionOrNull()?.message ?: "未知错误"
+                    failEditTurn(turnId, errMsg)
                     showToast("编辑失败: $errMsg")
                 }
+            } catch (e: CancellationException) {
+                failEditTurn(turnId, "已取消")
+                throw e
             } catch (e: Exception) {
-                _uiState.update { st ->
-                    st.copy(editSession = st.editSession.copy(
-                        turns = st.editSession.turns.map { t ->
-                            if (t.id == turnId) t.copy(error = e.message ?: "出错", isGenerating = false) else t
-                        },
-                        isGenerating = false
-                    ))
-                }
+                failEditTurn(turnId, e.message ?: "出错")
                 showToast("编辑出错: ${e.message}")
             } finally {
-                // 没有活跃任务时停止保活服务
-                val hasActiveTasks = _uiState.value.tasks.any {
-                    it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
-                }
-                if (!hasActiveTasks && !_uiState.value.editSession.isGenerating) {
-                    appContext.stopService(Intent(appContext, GenerationForegroundService::class.java))
-                }
+                editJob = null
+                stopServiceIfIdle()
             }
         }
+    }
+
+    private fun failEditTurn(turnId: String, msg: String) {
+        _uiState.update { st ->
+            st.copy(editSession = st.editSession.copy(
+                turns = st.editSession.turns.map { t ->
+                    if (t.id == turnId) t.copy(error = msg, isGenerating = false) else t
+                },
+                isGenerating = false
+            ))
+        }
+    }
+
+    /** 解码图片宽高，挑最接近的宽高比枚举（编辑时保持源图比例）。 */
+    private fun nearestAspectRatio(base64: String): AspectRatio? {
+        return try {
+            val bytes = Base64.decode(base64, Base64.NO_WRAP)
+            val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            val w = opts.outWidth; val h = opts.outHeight
+            if (w <= 0 || h <= 0) return null
+            val target = w.toFloat() / h
+            AspectRatio.entries.minByOrNull { kotlin.math.abs(it.widthRatio / it.heightRatio - target) }
+        } catch (e: Exception) { null }
     }
 
     fun saveEditResultToAlbum(turn: EditTurn) {
         val base64 = turn.resultImageBase64 ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingImage = true) }
-            // 通过内部存储路径保存（saveGeneratedImage已写入文件）
-            val internalPath = "${galleryRepo.getInternalDir()?.absolutePath}/${turn.id}.png"
-            val result = galleryRepo.saveToAlbum(turn.id, internalPath)
+            // 直接从 base64 存相册，不依赖内部文件路径是否已落盘
+            val result = galleryRepo.saveToAlbumFromBase64(base64)
             _uiState.update { it.copy(isSavingImage = false) }
             result.onSuccess { showToast("图片已保存到相册") }
                 .onFailure { showToast("保存失败: ${it.message}") }
         }
     }
 
-    // ── 带涂鸦遮罩的编辑 ─────────────────────────────────
-    fun sendEditWithMask(instruction: String, maskBase64: String) {
-        val session = _uiState.value.editSession
-        if (instruction.isBlank()) { showToast("请输入编辑指令"); return }
-        if (session.turns.isEmpty() && session.sourceImageBase64 == null) {
-            showToast("请先上传要编辑的图片"); return
+    /** 没有活跃任务且未在编辑时，停止前台保活服务。 */
+    private fun stopServiceIfIdle() {
+        val hasActive = _uiState.value.tasks.any {
+            it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
         }
-        if (session.isGenerating) return
-
-        val newTurn = EditTurn(
-            userText = "[涂鸦] $instruction",
-            inputImageBase64 = if (session.turns.isEmpty()) session.sourceImageBase64 else null
-        )
-        _uiState.update { it.copy(
-            editSession = it.editSession.copy(
-                turns = it.editSession.turns + newTurn.copy(isGenerating = true),
-                instruction = "",
-                isGenerating = true
-            )
-        )}
-
-        val turnId = newTurn.id
-        val sourceImage = session.sourceImageBase64
-
-        appContext.startForegroundService(
-            Intent(appContext, GenerationForegroundService::class.java)
-        )
-
-        viewModelScope.launch {
-            try {
-                val completedTurns = _uiState.value.editSession.turns.dropLast(1)
-                    .filter { it.resultImageBase64 != null }
-                val state = _uiState.value
-
-                // 将涂鸦遮罩作为额外参考图传递
-                val result = imageGenRepo.multiTurnEditImage(
-                    completedTurns = completedTurns,
-                    newInstruction = instruction,
-                    sourceImageBase64 = sourceImage,
-                    aspectRatio = state.selectedAspectRatio,
-                    imageSize = state.selectedImageSize,
-                    thinkingLevel = state.selectedThinkingLevel,
-                    maskImageBase64 = maskBase64
-                )
-
-                val base64 = result.getOrNull()
-                if (base64 != null) {
-                    _uiState.update { st ->
-                        st.copy(editSession = st.editSession.copy(
-                            turns = st.editSession.turns.map { t ->
-                                if (t.id == turnId) t.copy(resultImageBase64 = base64, isGenerating = false) else t
-                            },
-                            isGenerating = false
-                        ))
-                    }
-                    runCatching {
-                        galleryRepo.saveGeneratedImage(
-                            id = turnId,
-                            base64Data = base64,
-                            prompt = instruction,
-                            aspectRatio = state.selectedAspectRatio.value,
-                            imageSize = state.selectedImageSize.value
-                        )
-                    }
-                } else {
-                    val errMsg = result.exceptionOrNull()?.message ?: "未知错误"
-                    _uiState.update { st ->
-                        st.copy(editSession = st.editSession.copy(
-                            turns = st.editSession.turns.map { t ->
-                                if (t.id == turnId) t.copy(error = errMsg, isGenerating = false) else t
-                            },
-                            isGenerating = false
-                        ))
-                    }
-                    showToast("编辑失败: $errMsg")
-                }
-            } catch (e: Exception) {
-                _uiState.update { st ->
-                    st.copy(editSession = st.editSession.copy(
-                        turns = st.editSession.turns.map { t ->
-                            if (t.id == turnId) t.copy(error = e.message ?: "出错", isGenerating = false) else t
-                        },
-                        isGenerating = false
-                    ))
-                }
-                showToast("编辑出错: ${e.message}")
-            } finally {
-                val hasActiveTasks = _uiState.value.tasks.any {
-                    it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
-                }
-                if (!hasActiveTasks && !_uiState.value.editSession.isGenerating) {
-                    appContext.stopService(Intent(appContext, GenerationForegroundService::class.java))
-                }
-            }
+        if (!hasActive && !_uiState.value.editSession.isGenerating) {
+            appContext.stopService(Intent(appContext, GenerationForegroundService::class.java))
         }
     }
 

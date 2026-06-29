@@ -59,7 +59,8 @@ data class GenerateTask(
     val resultImageBase64: String? = null,
     val resultImagePath: String? = null,
     val errorMessage: String? = null,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val startedAt: Long? = null            // 进入"生成中"的时刻，用于展示已用时长
 )
 
 // ── 图片编辑多轮对话 ───────────────────────────────────────

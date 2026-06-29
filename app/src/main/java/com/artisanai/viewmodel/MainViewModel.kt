@@ -73,6 +73,15 @@ class MainViewModel(
     // 并发信号量：最多同时10个生图任务
     private val semaphore = kotlinx.coroutines.sync.Semaphore(10)
 
+    // 每个任务的执行 Job，用于"取消"按钮主动中断卡住的任务
+    private val taskJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+
+    companion object {
+        // 单个生图任务的总时长上限：超过即判定卡死，置为失败让用户重试，
+        // 而不是无限停在进度条上不知道死活。
+        private const val GEN_TIMEOUT_MS = 180_000L
+    }
+
     init {
         // 监听图库变化
         viewModelScope.launch {
@@ -112,11 +121,19 @@ class MainViewModel(
     }
 
     fun setReverseImage(base64: String?) {
-        _uiState.update { it.copy(reverseImageBase64 = base64) }
+        _uiState.update {
+            // 换了反推图，上次的反推结果就失效了——必须清空，否则 addGenerateTask 会
+            // 命中"已有反推结果直接用"的分支，拿旧图的提示词去生成新图。
+            if (it.reverseImageBase64 != base64) {
+                it.copy(reverseImageBase64 = base64, reversedPrompt = "")
+            } else {
+                it.copy(reverseImageBase64 = base64)
+            }
+        }
     }
 
     fun clearReverseImage() {
-        _uiState.update { it.copy(reverseImageBase64 = null) }
+        _uiState.update { it.copy(reverseImageBase64 = null, reversedPrompt = "") }
     }
 
     fun selectCount(count: Int) {
@@ -257,42 +274,59 @@ class MainViewModel(
     }
 
     private fun launchTaskExecution(task: GenerateTask) {
-        viewModelScope.launch {
-            semaphore.acquire()
+        val job = viewModelScope.launch {
+            var acquired = false
+            var progressJob: Job? = null
             try {
-                // 更新状态为处理中
-                updateTaskStatus(task.id, TaskStatus.PROCESSING, progress = 0.1f)
+                semaphore.acquire()
+                acquired = true
 
-                val result = imageGenRepo.generateImage(
-                    prompt = task.prompt,
-                    referenceImages = task.referenceImages,
-                    aspectRatio = task.aspectRatio,
-                    imageSize = task.imageSize,
-                    thinkingLevel = task.thinkingLevel,
-                    useGrounding = task.useGrounding
-                )
+                // 进入"生成中"：记录起始时刻 + 启动平滑爬升的进度动画，让用户看到任务是活的
+                markTaskStarted(task.id)
+                progressJob = launch { creepProgress(task.id) }
 
-                updateTaskStatus(task.id, TaskStatus.PROCESSING, progress = 0.8f)
-
-                result.onSuccess { base64 ->
-                    // 保存到内部图库
-                    val saveResult = galleryRepo.saveGeneratedImage(
-                        id = task.id,
-                        base64Data = base64,
+                // 总时长封顶：超时即判卡死，置失败而不是无限挂着
+                val result = withTimeoutOrNull(GEN_TIMEOUT_MS) {
+                    imageGenRepo.generateImage(
                         prompt = task.prompt,
-                        aspectRatio = task.aspectRatio.value,
-                        imageSize = task.imageSize.value
+                        referenceImages = task.referenceImages,
+                        aspectRatio = task.aspectRatio,
+                        imageSize = task.imageSize,
+                        thinkingLevel = task.thinkingLevel,
+                        useGrounding = task.useGrounding
                     )
-                    saveResult.onSuccess { path ->
-                        updateTaskFull(task.id, TaskStatus.SUCCESS, 1f, base64, path)
-                    }.onFailure {
-                        updateTaskFull(task.id, TaskStatus.SUCCESS, 1f, base64, null)
+                }
+                progressJob.cancel()
+
+                if (result == null) {
+                    updateTaskStatus(
+                        task.id, TaskStatus.FAILED,
+                        errorMessage = "生成超时（超过 ${GEN_TIMEOUT_MS / 1000} 秒无响应），请重试或更换线路"
+                    )
+                } else {
+                    result.onSuccess { base64 ->
+                        updateTaskProgress(task.id, 0.9f)
+                        // 保存到内部图库
+                        val saveResult = galleryRepo.saveGeneratedImage(
+                            id = task.id,
+                            base64Data = base64,
+                            prompt = task.prompt,
+                            aspectRatio = task.aspectRatio.value,
+                            imageSize = task.imageSize.value
+                        )
+                        saveResult.onSuccess { path ->
+                            updateTaskFull(task.id, TaskStatus.SUCCESS, 1f, base64, path)
+                        }.onFailure {
+                            updateTaskFull(task.id, TaskStatus.SUCCESS, 1f, base64, null)
+                        }
+                    }.onFailure { e ->
+                        updateTaskStatus(task.id, TaskStatus.FAILED, errorMessage = e.message)
                     }
-                }.onFailure { e ->
-                    updateTaskStatus(task.id, TaskStatus.FAILED, errorMessage = e.message)
                 }
             } finally {
-                semaphore.release()
+                progressJob?.cancel()
+                taskJobs.remove(task.id)
+                if (acquired) semaphore.release()
                 // 全部活跃任务结束后停止保活服务
                 val remaining = _uiState.value.tasks.count {
                     it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING
@@ -302,6 +336,33 @@ class MainViewModel(
                 }
             }
         }
+        taskJobs[task.id] = job
+    }
+
+    /** 用户主动取消一个排队/生成中的任务。 */
+    fun cancelTask(taskId: String) {
+        taskJobs.remove(taskId)?.cancel()
+        // 标记为失败并给出原因，保留卡片让用户可重试/移除
+        _uiState.update { state ->
+            state.copy(tasks = state.tasks.map {
+                if (it.id == taskId && (it.status == TaskStatus.QUEUED || it.status == TaskStatus.PROCESSING))
+                    it.copy(status = TaskStatus.FAILED, progress = 0f, errorMessage = "已取消")
+                else it
+            })
+        }
+    }
+
+    /** 进度条平滑爬升：渐进逼近 0.92，给"正在处理"的真实感，直到请求结束被取消。 */
+    private suspend fun creepProgress(taskId: String) {
+        val start = System.currentTimeMillis()
+        while (true) {
+            val elapsed = (System.currentTimeMillis() - start).toFloat()
+            // 指数逼近：约 18s 走到 ~0.6，之后越来越慢，封顶 0.92
+            val p = (0.08f + 0.84f * (1f - kotlin.math.exp((-elapsed / 18000f).toDouble()).toFloat()))
+                .coerceIn(0.08f, 0.92f)
+            updateTaskProgress(taskId, p)
+            delay(450)
+        }
     }
 
     fun retryTask(taskId: String) {
@@ -310,6 +371,7 @@ class MainViewModel(
             id = UUID.randomUUID().toString(),
             status = TaskStatus.QUEUED,
             progress = 0f,
+            startedAt = null,
             resultImageBase64 = null,
             resultImagePath = null,
             errorMessage = null
@@ -587,6 +649,29 @@ class MainViewModel(
             state.copy(tasks = state.tasks.map {
                 if (it.id == id) it.copy(status = status, progress = progress, errorMessage = errorMessage)
                 else it
+            })
+        }
+    }
+
+    /** 标记任务开始：状态置生成中、记录起始时刻、进度归到初始值。 */
+    private fun markTaskStarted(id: String) {
+        _uiState.update { state ->
+            state.copy(tasks = state.tasks.map {
+                if (it.id == id) it.copy(
+                    status = TaskStatus.PROCESSING,
+                    progress = 0.08f,
+                    startedAt = System.currentTimeMillis(),
+                    errorMessage = null
+                ) else it
+            })
+        }
+    }
+
+    /** 仅更新进度，不动状态（供进度动画使用）。 */
+    private fun updateTaskProgress(id: String, progress: Float) {
+        _uiState.update { state ->
+            state.copy(tasks = state.tasks.map {
+                if (it.id == id && it.status == TaskStatus.PROCESSING) it.copy(progress = progress) else it
             })
         }
     }

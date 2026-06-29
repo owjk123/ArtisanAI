@@ -77,7 +77,8 @@ fun TaskQueuePanel(
                     TaskCard(
                         task = task,
                         onRetry = { viewModel.retryTask(task.id) },
-                        onRemove = { viewModel.removeTask(task.id) }
+                        onRemove = { viewModel.removeTask(task.id) },
+                        onCancel = { viewModel.cancelTask(task.id) }
                     )
                 }
             }
@@ -112,8 +113,21 @@ private fun EmptyTaskState() {
 private fun TaskCard(
     task: GenerateTask,
     onRetry: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onCancel: () -> Unit
 ) {
+    // 生成中：每秒刷新一次，驱动"已用 Ns"的实时显示，让用户确认任务没死
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    if (task.status == TaskStatus.PROCESSING) {
+        LaunchedEffect(task.id) {
+            while (true) {
+                nowMs = System.currentTimeMillis()
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+    val elapsedSec: Long? = task.startedAt?.let { ((nowMs - it) / 1000).coerceAtLeast(0) }
+
     ArtisanCard(hasBorder = true) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -171,8 +185,13 @@ private fun TaskCard(
                 ) {
                     StatusBadge(task.status)
                     Text(
-                        text = "${task.aspectRatio.label}  ${task.imageSize.label}",
-                        style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted)
+                        text = if (task.status == TaskStatus.PROCESSING && elapsedSec != null)
+                            "已用 ${elapsedSec}s  ·  ${task.imageSize.label}"
+                        else "${task.aspectRatio.label}  ${task.imageSize.label}",
+                        style = ArtisanType.Caption.copy(
+                            color = if (task.status == TaskStatus.PROCESSING)
+                                ArtisanColors.Champagne else ArtisanColors.TextMuted
+                        )
                     )
                 }
 
@@ -206,7 +225,14 @@ private fun TaskCard(
                             modifier = Modifier.width(70.dp)
                         )
                     }
-                    if (task.status != TaskStatus.PROCESSING) {
+                    // 生成中 / 排队中：允许主动取消，立刻收回队列名额，不用干等超时
+                    if (task.status == TaskStatus.PROCESSING || task.status == TaskStatus.QUEUED) {
+                        OutlineGoldButton(
+                            text = "取消",
+                            onClick = onCancel,
+                            modifier = Modifier.width(70.dp)
+                        )
+                    } else {
                         OutlineGoldButton(
                             text = "移除",
                             onClick = onRemove,
@@ -226,6 +252,14 @@ private fun TaskCard(
                 color = ArtisanColors.Champagne,
                 trackColor = ArtisanColors.Steel
             )
+            // 超过 60s 仍未返回，提示可能偏慢，引导用户取消重试
+            if (elapsedSec != null && elapsedSec > 60) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "耗时较长，若长时间无结果可点「取消」重试",
+                    style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 10.sp)
+                )
+            }
         }
     }
 }

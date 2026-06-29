@@ -5,13 +5,21 @@ import android.util.Log
 import com.artisanai.util.ApiKeyManager
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import com.artisanai.data.model.AspectRatio
 import com.artisanai.data.model.EditTurn
 import com.artisanai.data.model.ImageSize
@@ -21,8 +29,10 @@ class ImageGenRepository(private val context: Context) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(300, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        // 整条调用（连接+写+读+响应处理）硬上限，防止单线路无限挂起占着进度条
+        .callTimeout(180, TimeUnit.SECONDS)
         .connectionPool(okhttp3.ConnectionPool(3, 90, TimeUnit.SECONDS)) // 90s idle，减少stale连接
         .build()
 
@@ -57,6 +67,8 @@ class ImageGenRepository(private val context: Context) {
         if (apiKey.isBlank()) return@withContext Result.failure(Exception("请先在设置中填写 API Key"))
         try {
             executeRequest(buildBody(prompt, aspectRatio, imageSize, thinkingLevel, useGrounding, referenceImages))
+        } catch (e: CancellationException) {
+            throw e   // 取消/超时必须向上传递，不能吞掉
         } catch (e: Exception) {
             Log.e("ImageGenRepo", "generateImage failed", e)
             Result.failure(e)
@@ -105,6 +117,8 @@ class ImageGenRepository(private val context: Context) {
             maskImageBase64?.let { images.add(it) }
 
             executeRequest(buildBody(editPrompt, aspectRatio, imageSize, thinkingLevel, false, images))
+        } catch (e: CancellationException) {
+            throw e   // 取消/超时必须向上传递，不能吞掉
         } catch (e: Exception) {
             Log.e("ImageGenRepo", "multiTurnEditImage failed", e)
             Result.failure(e)
@@ -156,7 +170,7 @@ class ImageGenRepository(private val context: Context) {
      * 顶层请求入口：依次尝试 候选线路。
      * 只在"连接/网络/网关类错误"时 fallback，4xx 业务错误（401/403/400等）立刻返回不再切换。
      */
-    private fun executeRequest(bodyJson: String): Result<String> {
+    private suspend fun executeRequest(bodyJson: String): Result<String> {
         val candidates = candidateBaseUrls()
         var lastErr: Exception? = null
         for ((idx, base) in candidates.withIndex()) {
@@ -171,6 +185,8 @@ class ImageGenRepository(private val context: Context) {
                 if (err is BusinessException) return r
                 lastErr = err as? Exception ?: Exception(err?.message ?: "未知错误")
                 Log.w("ImageGenRepo", "Endpoint $base failed, try next. ${lastErr.message}")
+            } catch (e: CancellationException) {
+                throw e   // 取消/超时立即中止，不再尝试其它线路
             } catch (e: Exception) {
                 lastErr = e
                 Log.w("ImageGenRepo", "Endpoint $base threw, try next.", e)
@@ -182,7 +198,7 @@ class ImageGenRepository(private val context: Context) {
     /** 业务错误——不应触发 fallback */
     private class BusinessException(msg: String) : Exception(msg)
 
-    private fun executeRequestOn(base: String, bodyJson: String): Result<String> {
+    private suspend fun executeRequestOn(base: String, bodyJson: String): Result<String> {
         val response = try {
             client.newCall(
                 Request.Builder()
@@ -191,9 +207,9 @@ class ImageGenRepository(private val context: Context) {
                     .header("Content-Type", "application/json")
                     .post(bodyJson.toRequestBody("application/json".toMediaType()))
                     .build()
-            ).execute()
-        } catch (e: java.io.IOException) {
-            // 连接失败 / 超时 / socket abort → 允许 fallback
+            ).await()
+        } catch (e: IOException) {
+            // 连接失败 / 超时 / socket abort / callTimeout → 允许 fallback
             return Result.failure(e)
         }
 
@@ -231,6 +247,26 @@ class ImageGenRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e("ImageGenRepo", "Parse error on $base, body (first 300): ${responseBody.take(300)}", e)
             Result.failure(Exception("解析响应失败: ${e.message}"))
+        }
+    }
+
+    /**
+     * 把 OkHttp 异步调用桥接为可取消的挂起函数。
+     * 协程被取消（用户取消任务 / withTimeout 触发）时，会真正 cancel 掉底层 HTTP 调用，
+     * 而不是让阻塞的 execute() 把线程一直占住——这是"任务卡死"能被及时中断的关键。
+     */
+    private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+        enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                cont.resume(response)
+            }
+            override fun onFailure(call: Call, e: IOException) {
+                if (cont.isCancelled) return
+                cont.resumeWithException(e)
+            }
+        })
+        cont.invokeOnCancellation {
+            try { cancel() } catch (_: Throwable) {}
         }
     }
 }

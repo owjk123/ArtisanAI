@@ -10,12 +10,17 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.artisanai.v2"
+        // 3.0 起换独立包名：与旧版 2.0（com.artisanai.v2）共存，不再要求卸载旧版。
+        // 版本管理约定：
+        //   · 同一包名内靠固定签名密钥（GitHub Secrets）支持覆盖升级，3.0.x 之间可直接升级；
+        //   · versionCode = CI run_number，单调递增，永不回退；
+        //   · versionName = 3.0.<run_number>，与构建号一一对应，便于排查。
+        applicationId = "com.artisanai.v3"
         minSdk = 26
         targetSdk = 35
         val buildNumber = (System.getenv("BUILD_NUMBER") ?: "1").toInt()
         versionCode = buildNumber
-        versionName = "2.0.$buildNumber"
+        versionName = "3.0.$buildNumber"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

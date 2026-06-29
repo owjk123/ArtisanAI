@@ -131,6 +131,13 @@ app/src/main/java/com/artisanai/
 
 ---
 
+## 版本管理
+
+- **包名**：`com.artisanai.v3`（3.0 起）。旧版 2.0 为 `com.artisanai.v2`，**两者独立共存**，互不覆盖；确认 3.0 可用后可自行卸载旧版 2.0。
+- **签名**：固定密钥库，经 GitHub Secrets 注入 CI（`ARTISAN_KEYSTORE_BASE64` / `_PASSWORD` / `ARTISAN_KEY_ALIAS` / `ARTISAN_KEY_PASSWORD`）。**同一包名内所有版本共用此密钥，因此 3.0.x 之间可直接覆盖升级**（无需卸载）。
+- **版本号**：`versionCode = CI run_number`（单调递增，永不回退）；`versionName = 3.0.<run_number>`，与构建号一一对应。
+- **升级规则**：换包名（大版本不兼容/需共存）才会要求重新安装；否则保持包名 + 固定签名即可一路覆盖升级。**切勿更换或丢失签名密钥**，否则后续版本将无法覆盖升级（密钥库备份与密码见本机 `artisan-release-keystore-info.txt`）。
+
 ## 注意事项
 
 - API Key 使用 SharedPreferences 本地存储，不会上传服务器

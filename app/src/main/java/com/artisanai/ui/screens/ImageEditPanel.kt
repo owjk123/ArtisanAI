@@ -66,11 +66,14 @@ fun ImageEditPanel(
     var currentPath by remember { mutableStateOf(listOf<Offset>()) }
     // 画布尺寸（用于把涂鸦坐标换算到图片像素）
     var canvasSize by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
+    // 已确认的涂鸦整图（红痕已烧入），等用户输入"改成什么"后随发送一起提交
+    var pendingMarkedImage by remember { mutableStateOf<String?>(null) }
 
-    // 换源图后清掉残留涂鸦
+    // 换源图后清掉残留涂鸦与待发标记
     LaunchedEffect(session.sourceImageBase64) {
         drawingPaths = emptyList()
         currentPath = emptyList()
+        pendingMarkedImage = null
         showDrawingCanvas = false
     }
 
@@ -140,6 +143,7 @@ fun ImageEditPanel(
                             viewModel.clearEditSession()
                             drawingPaths = emptyList()
                             currentPath = emptyList()
+                            pendingMarkedImage = null
                             showDrawingCanvas = false
                         },
                         modifier = Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)).background(ArtisanColors.Graphite)
@@ -206,11 +210,11 @@ fun ImageEditPanel(
                     },
                     onCanvasSizeChanged = { canvasSize = it },
                     onApplyMask = {
-                        // 把红痕烧进整图后发送（而不是单独发黑白遮罩）
+                        // 只「确认标记」：把红痕烧进整图存起来，等用户输入要改成什么再发送
                         if (drawingPaths.isNotEmpty() && canvasSize != androidx.compose.ui.geometry.Size.Zero) {
                             val marked = generateMarkedImageBitmap(drawingPaths, canvasSize, imgBase64)
                             if (marked != null) {
-                                viewModel.sendEditWithMarkedImage(session.instruction, marked)
+                                pendingMarkedImage = marked
                                 showDrawingCanvas = false
                                 drawingPaths = emptyList()
                                 currentPath = emptyList()
@@ -249,6 +253,36 @@ fun ImageEditPanel(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // 涂鸦已就绪提示条：标记完成、等待输入修改内容
+            if (pendingMarkedImage != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(ArtisanColors.Charcoal)
+                        .border(1.dp, ArtisanColors.Champagne.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.Brush, null, tint = ArtisanColors.Champagne, modifier = Modifier.size(13.dp))
+                    Text(
+                        "局部涂鸦已就绪，输入要改成什么后发送",
+                        style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp),
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .clickable { pendingMarkedImage = null },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Close, "取消标记", tint = ArtisanColors.TextMuted, modifier = Modifier.size(12.dp))
+                    }
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
@@ -271,7 +305,8 @@ fun ImageEditPanel(
                         decorationBox = { inner ->
                             if (session.instruction.isEmpty()) {
                                 Text(
-                                    if (showDrawingCanvas) "输入涂鸦区域的修改指令..." else "输入编辑指令，如：把背景换成星空，风格改成水彩...",
+                                    if (pendingMarkedImage != null) "输入要在标记区域做的修改，如：把这里换成花瓶..."
+                                    else "输入编辑指令，如：把背景换成星空，风格改成水彩...",
                                     style = ArtisanType.Body.copy(color = ArtisanColors.TextMuted, fontSize = 13.sp)
                                 )
                             }
@@ -293,8 +328,14 @@ fun ImageEditPanel(
                             RoundedCornerShape(8.dp)
                         )
                         .clickable(enabled = session.isGenerating || canSend) {
-                            if (session.isGenerating) viewModel.cancelEdit()
-                            else viewModel.sendEditInstruction()
+                            when {
+                                session.isGenerating -> viewModel.cancelEdit()
+                                pendingMarkedImage != null -> {
+                                    viewModel.sendEditWithMarkedImage(session.instruction, pendingMarkedImage!!)
+                                    pendingMarkedImage = null
+                                }
+                                else -> viewModel.sendEditInstruction()
+                            }
                         },
                     contentAlignment = Alignment.Center
                 ) {
@@ -415,7 +456,7 @@ private fun DrawingCanvasSection(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("涂鸦标记（白色区域将被修改）", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
+            Text("涂鸦标记（标红区域将被修改）", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 // 清除按钮
                 Box(
@@ -427,7 +468,7 @@ private fun DrawingCanvasSection(
                 ) {
                     Text("清除", style = ArtisanType.Caption.copy(color = ArtisanColors.TextSecondary, fontSize = 11.sp))
                 }
-                // 应用涂鸦按钮
+                // 确认标记按钮（只确认，不发送；之后回输入框写"改成什么"）
                 if (paths.isNotEmpty()) {
                     Box(
                         modifier = Modifier
@@ -437,7 +478,7 @@ private fun DrawingCanvasSection(
                             .clickable { onApplyMask() }
                             .padding(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        Text("应用涂鸦", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
+                        Text("确认标记", style = ArtisanType.Caption.copy(color = ArtisanColors.Champagne, fontSize = 11.sp))
                     }
                 }
             }
@@ -537,7 +578,7 @@ private fun DrawingCanvasSection(
         if (paths.isNotEmpty()) {
             Spacer(Modifier.height(4.dp))
             Text(
-                "已标记 ${paths.size} 个区域，点击「应用涂鸦」发送修改请求",
+                "已标记 ${paths.size} 个区域，点「确认标记」后回输入框写要改成什么再发送",
                 style = ArtisanType.Caption.copy(color = ArtisanColors.TextMuted, fontSize = 10.sp)
             )
         }
